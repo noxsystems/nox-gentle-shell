@@ -8,6 +8,53 @@ import {
   NOX_GENTLE_SHELL_WIDGET_KEY,
 } from "../extensions/constants.js";
 
+test("RSS samples existing refreshes, never render callbacks, and discards failed samples", async () => {
+  const { ctx, calls } = createContext();
+  let samples = 0;
+  let value: number | undefined = 1048576;
+  let throws = false;
+  const controller = createVisualController(undefined, undefined, () => {
+    samples++;
+    if (throws) throw new Error("unavailable");
+    return value;
+  });
+  controller.start(ctx as never);
+  assert.equal(samples, 1);
+  controller.setMode("detailed", ctx as never);
+  assert.equal(samples, 2);
+  const render = () => {
+    const factory = calls
+      .filter(([surface]) => surface === "widget")
+      .at(-1)?.[2] as Function;
+    return factory({}, { fg: (_role: string, text: string) => text })
+      .render(80)
+      .join("\n");
+  };
+  assert.match(render(), /Pi RAM: 1 MiB/);
+  render();
+  assert.equal(samples, 2);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(samples, 2, "idle time does not schedule memory sampling");
+  for (value of [0, undefined, -1, NaN, Infinity, 2097152]) {
+    controller.refresh(ctx as never);
+    const valid = value !== undefined && Number.isFinite(value) && value >= 0;
+    assert.ok(
+      render().includes(`Pi RAM: ${valid ? `${value! / 1048576} MiB` : "—"}`),
+    );
+  }
+  throws = true;
+  controller.refresh(ctx as never);
+  assert.match(render(), /Pi RAM: —/);
+  assert.equal(samples, 9);
+  controller.updateTools(
+    { type: "start", toolCallId: "one", toolName: "read" },
+    ctx as never,
+  );
+  assert.equal(samples, 10);
+  controller.cleanup(ctx as never);
+  assert.equal(samples, 10);
+});
+
 const SINGLETON_UI_SURFACES = new Set([
   "header",
   "workingMessage",
@@ -333,9 +380,7 @@ test("detailed mode clears compact status, keeps a static card title, and refres
     { fg: (_color: string, text: string) => text },
   ).render(40);
   assert.ok(activeCard[0].startsWith("┌─ Nox 🌑 "));
-  assert.ok(
-    activeCard.some((line: string) => line.includes("Active tools: bash")),
-  );
+  assert.ok(activeCard.some((line: string) => line.includes("Tools: bash")));
 
   const widgetRefreshes = calls.filter((call) => call[0] === "widget").length;
   await new Promise((resolve) => setTimeout(resolve, 450));
@@ -356,9 +401,7 @@ test("detailed mode clears compact status, keeps a static card title, and refres
     { fg: (_color: string, text: string) => text },
   ).render(40);
   assert.ok(idleCard[0].startsWith("┌─ Nox 🌑 "));
-  assert.ok(
-    idleCard.some((line: string) => line.includes("Active tools: none")),
-  );
+  assert.ok(idleCard.some((line: string) => line.includes("Tools: none")));
   assert.ok(!idleCard.some((line: string) => line.includes("bash")));
   assert.ok(calls.every(([surface]) => !SINGLETON_UI_SURFACES.has(surface)));
 });
@@ -394,7 +437,7 @@ test("detailed TUI widgets fit Unicode active tools without duplicating the host
       ),
     );
     if (width >= 20) {
-      assert.ok(lines.some((line: string) => line.includes("Active tools:")));
+      assert.ok(lines.some((line: string) => line.includes("Tools:")));
     }
     if (width === 80) {
       assert.ok(
@@ -424,9 +467,7 @@ test("detailed RPC widgets refresh on tool lifecycle events without periodic upd
     (widget?.[2] as string[]).every((line) => visibleWidth(line) <= 120),
   );
   assert.ok(
-    (widget?.[2] as string[]).some((line) =>
-      line.includes("Active tools: bash"),
-    ),
+    (widget?.[2] as string[]).some((line) => line.includes("Tools: bash")),
   );
   assert.ok(!(widget?.[2] as string[]).some((line) => line.includes("模型")));
 
@@ -448,7 +489,7 @@ test("detailed RPC widgets refresh on tool lifecycle events without periodic upd
   const idle = calls
     .filter((call) => call[0] === "widget")
     .at(-1)?.[2] as string[];
-  assert.ok(idle.some((line) => line.includes("Active tools: none")));
+  assert.ok(idle.some((line) => line.includes("Tools: none")));
   assert.ok(!idle.some((line) => line.includes("bash")));
 });
 
