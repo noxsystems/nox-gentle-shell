@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createVisualController } from "../extensions/runtime.js";
+import { createSpotifyController } from "../extensions/spotify-ui.js";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
@@ -53,6 +54,42 @@ test("RSS samples existing refreshes, never render callbacks, and discards faile
   assert.equal(samples, 10);
   controller.cleanup(ctx as never);
   assert.equal(samples, 10);
+});
+
+test("visibility toggle restores visible modes from commands and cycling and resets on cleanup", (t) => {
+  const { ctx } = createContext();
+  const controller = createVisualController(
+    undefined,
+    createSpotifyController({ clientId: "" }),
+  );
+  t.after(() => controller.cleanup(ctx as never));
+  const toggle = () => controller.toggleVisibility(ctx as never);
+  toggle();
+  assert.equal(controller.state.mode, "off");
+  toggle();
+  assert.equal(controller.state.mode, "compact");
+  controller.runCommand("detailed", ctx as never);
+  toggle();
+  assert.equal(controller.state.mode, "off");
+  toggle();
+  assert.equal(controller.state.mode, "detailed");
+  controller.runCommand("compact", ctx as never);
+  controller.cycleMode(ctx as never);
+  controller.cycleMode(ctx as never);
+  assert.equal(controller.state.mode, "off");
+  toggle();
+  assert.equal(controller.state.mode, "detailed");
+  controller.runCommand("off", ctx as never);
+  controller.cycleMode(ctx as never);
+  toggle();
+  toggle();
+  assert.equal(controller.state.mode, "compact");
+  controller.setMode("detailed", ctx as never);
+  controller.cleanup(ctx as never);
+  controller.setMode("off", ctx as never);
+  toggle();
+  assert.equal(controller.state.mode, "compact");
+  controller.cleanup(ctx as never);
 });
 
 const SINGLETON_UI_SURFACES = new Set([
@@ -352,9 +389,13 @@ test("refreshes finalized telemetry and reduces interleaved concurrent tool life
   assert.equal(Object.keys(controller.state.activeTools).length, 0);
 });
 
-test("detailed mode clears compact status, keeps a static card title, and refreshes only on lifecycle events", async () => {
+test("detailed mode clears compact status, keeps a static card title, and refreshes only on lifecycle events", async (t) => {
   const { ctx, calls } = createContext();
-  const controller = createVisualController();
+  const controller = createVisualController(
+    undefined,
+    createSpotifyController({ clientId: "" }),
+  );
+  t.after(() => controller.cleanup(ctx as never));
 
   controller.start(ctx as never);
   calls.length = 0;

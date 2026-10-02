@@ -1,11 +1,14 @@
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   closeSync,
   lstatSync,
   mkdtempSync,
   openSync,
   existsSync,
+  rmSync,
+  type Stats,
 } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -14,6 +17,36 @@ import {
   linuxCredentialLease,
   CredentialLockUnavailable,
 } from "../extensions/spotify-lock.js";
+
+let runtimeFixture: string | undefined;
+let runtimeIdentity: Stats | undefined;
+let originalRuntime: string | undefined;
+
+before(() => {
+  if (process.platform !== "linux") return;
+  originalRuntime = process.env.XDG_RUNTIME_DIR;
+  runtimeFixture = mkdtempSync(join(tmpdir(), "spotify-lock-runtime-"));
+  chmodSync(runtimeFixture, 0o700);
+  runtimeIdentity = lstatSync(runtimeFixture);
+  assert.equal(runtimeIdentity.isDirectory(), true);
+  assert.equal(runtimeIdentity.uid, process.getuid!());
+  assert.equal(runtimeIdentity.mode & 0o777, 0o700);
+  process.env.XDG_RUNTIME_DIR = runtimeFixture;
+});
+
+after(() => {
+  if (process.platform !== "linux") return;
+  if (originalRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
+  else process.env.XDG_RUNTIME_DIR = originalRuntime;
+  if (!runtimeFixture || !runtimeIdentity) return;
+  const current = lstatSync(runtimeFixture);
+  assert.equal(current.isDirectory(), true);
+  assert.equal(current.uid, process.getuid!());
+  assert.equal(current.mode & 0o777, 0o700);
+  assert.equal(current.dev, runtimeIdentity.dev);
+  assert.equal(current.ino, runtimeIdentity.ino);
+  rmSync(runtimeFixture, { recursive: true });
+});
 
 test("real flock leases acquire, block, release and allow reacquisition", async () => {
   if (process.platform !== "linux" || !process.env.XDG_RUNTIME_DIR) return;
