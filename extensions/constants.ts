@@ -10,6 +10,14 @@ export const NOX_GENTLE_SHELL_SHORTCUTS = {
     identifier: "nox-gentle-shell.shortcut.cycle-mode",
     key: "ctrl+alt+t",
   },
+  openSpotify: {
+    identifier: "nox-gentle-shell.shortcut.open-spotify",
+    key: "ctrl+alt+p",
+  },
+  toggleVisibility: {
+    identifier: "nox-gentle-shell.shortcut.toggle-visibility",
+    key: "ctrl+alt+n",
+  },
 } as const;
 
 export const NOX_GENTLE_SHELL_IDENTIFIERS = [
@@ -18,4 +26,6 @@ export const NOX_GENTLE_SHELL_IDENTIFIERS = [
   NOX_GENTLE_SHELL_WIDGET_KEY,
   NOX_GENTLE_SHELL_FULLSCREEN_CONTRIBUTION_KEY,
   NOX_GENTLE_SHELL_SHORTCUTS.cycleMode.identifier,
+  NOX_GENTLE_SHELL_SHORTCUTS.openSpotify.identifier,
+  NOX_GENTLE_SHELL_SHORTCUTS.toggleVisibility.identifier,
 ] as const;

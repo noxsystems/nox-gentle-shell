@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   NOX_GENTLE_SHELL_COMMAND_NAME,
   NOX_GENTLE_SHELL_SHORTCUTS,
@@ -53,6 +56,42 @@ export default function (
   });
 
   let overlayOpen = false;
+  const openSpotify = async (ctx: ExtensionContext) => {
+    if (!ctx.hasUI || ctx.mode !== "tui" || !controller.spotify.configured) {
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          "Spotify overlay requires an interactive TUI and SPOTIFY_CLIENT_ID.",
+          "warning",
+        );
+      return;
+    }
+    if (overlayOpen) return;
+    overlayOpen = true;
+    let closeCurrent: (() => void) | undefined;
+    try {
+      controller.setSpotifyOverlayOpen(true, ctx);
+      await ctx.ui.custom<void>(
+        (tui, theme, _keys, done) => {
+          const component = spotifyOverlayComponent(
+            controller.spotify,
+            theme,
+            () => tui.requestRender(),
+            done,
+          );
+          closeCurrent = () => component.close();
+          controller.setSpotifyOverlayClose(closeCurrent);
+          return component;
+        },
+        { overlay: true },
+      );
+    } finally {
+      // A late finally must not clear a newer overlay's close callback.
+      if (closeCurrent)
+        controller.setSpotifyOverlayClose(undefined, closeCurrent);
+      overlayOpen = false;
+      controller.setSpotifyOverlayOpen(false, ctx);
+    }
+  };
   pi.registerCommand("nox-spotify", {
     description: "Spotify Connect: connect, disconnect, open, refresh",
     handler: async (args, ctx) => {
@@ -136,43 +175,7 @@ export default function (
           );
         return;
       }
-      if (command === "open") {
-        if (ctx.mode !== "tui" || !controller.spotify.configured) {
-          if (ctx.hasUI)
-            ctx.ui.notify(
-              "Spotify overlay requires an interactive TUI and SPOTIFY_CLIENT_ID.",
-              "warning",
-            );
-          return;
-        }
-        if (overlayOpen) return;
-        overlayOpen = true;
-        controller.setSpotifyOverlayOpen(true, ctx);
-        let closeCurrent: (() => void) | undefined;
-        try {
-          await ctx.ui.custom<void>(
-            (tui, theme, _keys, done) => {
-              const component = spotifyOverlayComponent(
-                controller.spotify,
-                theme,
-                () => tui.requestRender(),
-                done,
-              );
-              closeCurrent = () => component.close();
-              controller.setSpotifyOverlayClose(closeCurrent);
-              return component;
-            },
-            { overlay: true },
-          );
-        } finally {
-          // A late finally must not clear a newer overlay's close callback.
-          if (closeCurrent)
-            controller.setSpotifyOverlayClose(undefined, closeCurrent);
-          overlayOpen = false;
-          controller.setSpotifyOverlayOpen(false, ctx);
-        }
-        return;
-      }
+      if (command === "open") return openSpotify(ctx);
       if (ctx.hasUI)
         ctx.ui.notify(
           "Usage: /nox-spotify [connect|disconnect|open|refresh]",
@@ -184,5 +187,13 @@ export default function (
   pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.cycleMode.key, {
     description: "Cycle Nox visual mode",
     handler: (ctx) => controller.cycleMode(ctx),
+  });
+  pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.openSpotify.key, {
+    description: "Open Spotify overlay without starting playback",
+    handler: openSpotify,
+  });
+  pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.toggleVisibility.key, {
+    description: "Hide/show Nox card, restoring the last visible mode",
+    handler: (ctx) => controller.toggleVisibility(ctx),
   });
 }

@@ -88,6 +88,7 @@ export interface VisualController {
   updateTools(event: ActiveToolEvent, ctx: ExtensionContext): void;
   setMode(mode: VisualMode, ctx: ExtensionContext): void;
   cycleMode(ctx: ExtensionContext): void;
+  toggleVisibility(ctx: ExtensionContext): void;
   runCommand(args: string, ctx: ExtensionContext): void;
   cleanup(ctx: ExtensionContext): void;
 }
@@ -99,6 +100,7 @@ export function createVisualController(
   sampleRss: () => number | undefined = () => process.memoryUsage().rss,
 ): VisualController {
   let state = emptyState();
+  let lastVisibleMode: Exclude<VisualMode, "off"> = "compact";
   let rssBytes: number | undefined;
   let contextWarningArmed = true;
   const fullscreenContribution = createFullscreenContributionClient(events);
@@ -292,8 +294,13 @@ export function createVisualController(
     },
     setMode(mode, ctx) {
       if (mode !== state.mode && mode !== "detailed") closeOverlay();
+      if (mode !== "off") lastVisibleMode = mode;
       state = { ...state, mode };
       this.refresh(ctx);
+    },
+    toggleVisibility(ctx) {
+      this.setMode(state.mode === "off" ? lastVisibleMode : "off", ctx);
+      notify(ctx, `ℹ Nox visual mode: ${state.mode}`);
     },
     cycleMode(ctx) {
       const mode = NEXT_MODE[state.mode];
@@ -345,6 +352,7 @@ export function createVisualController(
       spotifyController.dispose();
       lastContext = undefined;
       state = emptyState();
+      lastVisibleMode = "compact";
       rssBytes = undefined;
       contextWarningArmed = true;
     },

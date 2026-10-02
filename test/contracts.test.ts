@@ -234,6 +234,14 @@ test("exports stable command, UI key, contribution key, and shortcut values", ()
       identifier: "nox-gentle-shell.shortcut.cycle-mode",
       key: "ctrl+alt+t",
     },
+    openSpotify: {
+      identifier: "nox-gentle-shell.shortcut.open-spotify",
+      key: "ctrl+alt+p",
+    },
+    toggleVisibility: {
+      identifier: "nox-gentle-shell.shortcut.toggle-visibility",
+      key: "ctrl+alt+n",
+    },
   });
 });
 

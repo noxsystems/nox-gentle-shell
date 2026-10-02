@@ -74,7 +74,7 @@ test("registers distinct namespaced commands, mode shortcut, and telemetry lifec
   );
   assert.deepEqual(
     shortcuts.map((shortcut) => shortcut.key),
-    [NOX_GENTLE_SHELL_SHORTCUTS.cycleMode.key],
+    ["ctrl+alt+t", "ctrl+alt+p", "ctrl+alt+n"],
   );
   for (const event of [
     "session_start",
@@ -250,6 +250,85 @@ test("mode transitions and shutdown close only their active overlay", async () =
   await second;
   assert.equal(closes, 2);
   complete();
+});
+
+test("Spotify open command and shortcut share guards, cleanup and never control playback", async () => {
+  for (const configured of [false, true]) {
+    let actions = 0;
+    const spotify = createSpotifyController({
+      clientId: configured ? "client" : "",
+      auth: {
+        connect: async () => ({ persistenceAvailable: false }),
+        disconnect: async () => {},
+        getAccessToken: async () => null,
+        persistenceAvailable: false,
+      },
+      api: {
+        getPlayback: async () => null,
+        play: async () => {
+          actions++;
+        },
+        pause: async () => {
+          actions++;
+        },
+        next: async () => {
+          actions++;
+        },
+        previous: async () => {
+          actions++;
+        },
+      },
+    });
+    Object.defineProperty(spotify, "configured", { value: configured });
+    const controller = createVisualController(undefined, spotify);
+    const { commands, shortcuts } = createExtensionRegistration(controller);
+    const command = commands.find((entry) => entry.name === "nox-spotify")!;
+    const shortcut = shortcuts.find((entry) => entry.key === "ctrl+alt+p");
+    assert.ok(shortcut, "register Spotify open shortcut");
+    const { ctx, calls } = createContext();
+    let opened = 0;
+    (ctx.ui as object as { custom: Function }).custom = async () => {
+      opened++;
+      throw new Error("overlay failed");
+    };
+    for (const open of [
+      (context: unknown) => command.options.handler("open", context),
+      (context: unknown) => shortcut.options.handler(context),
+    ]) {
+      await open({ ...ctx, mode: "rpc" });
+      assert.match(String(calls.at(-1)?.[1]), /interactive TUI/);
+      calls.length = 0;
+      await open({ ...ctx, hasUI: false });
+      assert.deepEqual(calls, []);
+      if (configured) {
+        await assert.rejects(open(ctx), /overlay failed/);
+        assert.equal(spotify.active, false, "restore visibility after failure");
+      } else {
+        await open(ctx);
+        assert.match(String(calls.at(-1)?.[1]), /SPOTIFY_CLIENT_ID/);
+      }
+    }
+    assert.equal(opened, configured ? 2 : 0, "exception allows reopening");
+    assert.equal(actions, 0);
+    controller.cleanup(ctx as never);
+  }
+});
+
+test("Nox visibility shortcut invokes the controller toggle and preserves legacy cycling", () => {
+  const controller = createVisualController();
+  const { shortcuts } = createExtensionRegistration(controller);
+  const { ctx } = createContext();
+  const toggle = shortcuts.find((entry) => entry.key === "ctrl+alt+n");
+  assert.ok(toggle);
+  toggle.options.handler(ctx);
+  assert.equal(controller.state.mode, "off");
+  toggle.options.handler(ctx);
+  shortcuts.find((entry) => entry.key === "ctrl+alt+t")!.options.handler(ctx);
+  assert.equal(controller.state.mode, "detailed");
+  toggle.options.handler(ctx);
+  toggle.options.handler(ctx);
+  assert.equal(controller.state.mode, "detailed");
+  controller.cleanup(ctx as never);
 });
 
 test("registered command is inert in print mode", async () => {
