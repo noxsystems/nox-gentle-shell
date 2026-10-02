@@ -64,7 +64,7 @@ Spotify controls and the Spotify row are TUI-only; RPC, print, and JSON do not s
 
 ## Telemetry semantics and limitations
 
-Telemetry combines current context usage from Pi with **finalized** usage stored in public session entries. It reports available context tokens/window/percentage, finalized input/output/cache usage and cost, message and assistant-turn counts, and currently active tool names/counts.
+Telemetry combines current context usage from Pi with **finalized** usage stored in public session entries. Compact mode retains context percentage, input/output tokens, combined cache tokens, cost, and active-tool count. The detailed card complements the host header: it omits model/provider, context, and cost, and labels input/output tokens, separate cache reads/writes, message entries, finalized assistant turns, and currently active tool names. Active tools are not cumulative executions; assistant turns are not errors.
 
 It is not a continuously streaming exact token or cost total. Missing host data, including the period immediately after compaction, is rendered as `—` or omitted. It deliberately does not inspect process, CPU, RAM, battery, or operating-system metrics.
 
@@ -76,11 +76,10 @@ While a Pi UI exists, Nox emits one extension-owned warning when valid context u
 Context usage reached {percent}%. Start a new session soon to avoid automatic compaction.
 ```
 
-### Symbol legend
+### Compact symbol legend
 
 | Symbol | Meaning |
 | --- | --- |
-| `◆` | Model identity |
 | `◉` | Context percentage |
 | `↑` | Finalized input tokens |
 | `↓` | Finalized output tokens |
@@ -103,16 +102,18 @@ Compact mode:
 Detailed mode:
 
 ```text
-┌─ Nox 🌑 ──────────────────────────────────────────┐
-│ ◆ claude/sonnet                                  │
-│ ◉ 53.8k / 128k (42%)                             │
-│ ↑ 18.2k · ↓ 3.1k · ◇ 9.4k                        │
-│ $ $0.08                                          │
-│ ✉ 9 · ◌ 7 · ⚙ bash                               │
-└──────────────────────────────────────────────────┘
+┌─ Nox 🌑 ─────────────┐
+│ Input tokens: 18.2k  │
+│ Output tokens: 3.1k  │
+│ Cache reads: 9.4k    │
+│ Cache writes: 2.1k   │
+│ Message entries: 9   │
+│ Assistant turns: 7   │
+│ Active tools: bash   │
+└──────────────────────┘
 ```
 
-Detailed mode clears Nox's compact status, leaving this single titled and one-cell-padded telemetry card with the static `Nox 🌑` title. When Pi supplies a theme, the card reads the active public theme at render time: frame segments use `border`, the title uses `accent`, telemetry glyphs use `muted`, separators use `dim`, and values use `text`. The text fixture above intentionally omits ANSI styling; Nox never hardcodes palette values and pure callers may continue rendering plain strings. Gentle Pi's host prompt owns the sole `🌑`, `☾`, `◯`, `☽`, `🌑` lunar animation for the agent-wide working lifecycle. Narrow TUI widgets render every card line against the terminal width, including long Unicode model labels. In detailed TUI mode, Nox emits the public `gentle-pi.fullscreen-contribution/v1` request with the namespaced `nox-gentle-shell.fullscreen-telemetry` rail key and `widget` fallback. A synchronous accepted lease suppresses Nox's duplicate widget; an absent, inactive, invalid, unsupported, or failing host keeps that widget fallback. Nox disposes an accepted lease when leaving detailed mode or shutting down. RPC has no terminal width, so it receives the compatible public string-array widget at a deterministic fallback width using the current public context theme.
+Detailed mode clears Nox's compact status, leaving this single titled and one-cell-padded telemetry card with the static `Nox 🌑` title. When Pi supplies a theme, the card reads the active public theme at render time: frame segments use `border`, the title uses `accent`, telemetry labels use `muted` and values use `text`. The text fixture above intentionally omits ANSI styling; Nox never hardcodes palette values and pure callers may continue rendering plain strings. Gentle Pi's host prompt owns the sole `🌑`, `☾`, `◯`, `☽`, `🌑` lunar animation for the agent-wide working lifecycle. Narrow TUI widgets render every card line against the terminal width, including long Unicode tool names and Spotify tracks. In detailed TUI mode, Nox emits the public `gentle-pi.fullscreen-contribution/v1` request with the namespaced `nox-gentle-shell.fullscreen-telemetry` rail key and `widget` fallback. A synchronous accepted lease suppresses Nox's duplicate widget; an absent, inactive, invalid, unsupported, or failing host keeps that widget fallback. Nox disposes an accepted lease when leaving detailed mode or shutting down. RPC has no terminal width, so it receives the compatible public string-array widget at a deterministic fallback width using the current public context theme.
 
 ## Mode matrix
 

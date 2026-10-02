@@ -333,7 +333,9 @@ test("detailed mode clears compact status, keeps a static card title, and refres
     { fg: (_color: string, text: string) => text },
   ).render(40);
   assert.ok(activeCard[0].startsWith("┌─ Nox 🌑 "));
-  assert.ok(activeCard.some((line: string) => line.includes("⚙ bash")));
+  assert.ok(
+    activeCard.some((line: string) => line.includes("Active tools: bash")),
+  );
 
   const widgetRefreshes = calls.filter((call) => call[0] === "widget").length;
   await new Promise((resolve) => setTimeout(resolve, 450));
@@ -354,10 +356,14 @@ test("detailed mode clears compact status, keeps a static card title, and refres
     { fg: (_color: string, text: string) => text },
   ).render(40);
   assert.ok(idleCard[0].startsWith("┌─ Nox 🌑 "));
+  assert.ok(
+    idleCard.some((line: string) => line.includes("Active tools: none")),
+  );
+  assert.ok(!idleCard.some((line: string) => line.includes("bash")));
   assert.ok(calls.every(([surface]) => !SINGLETON_UI_SURFACES.has(surface)));
 });
 
-test("detailed TUI widgets render every Unicode model line within the terminal width", () => {
+test("detailed TUI widgets fit Unicode active tools without duplicating the host model", () => {
   const { ctx, calls } = createContext();
   ctx.model = { provider: "nox", id: "模型👨‍👩‍👧‍👦-with-a-very-long-label" };
   const controller = createVisualController();
@@ -365,15 +371,39 @@ test("detailed TUI widgets render every Unicode model line within the terminal w
   controller.start(ctx as never);
   controller.setMode("detailed", ctx as never);
 
+  controller.updateTools(
+    {
+      type: "start",
+      toolCallId: "unicode",
+      toolName: "工具👨‍👩‍👧‍👦-with-a-very-long-label",
+    },
+    ctx as never,
+  );
   const widget = calls.filter((call) => call[0] === "widget").at(-1);
   assert.equal(typeof widget?.[2], "function");
   const component = (widget?.[2] as Function)(
     {},
     { fg: (_color: string, text: string) => text },
   );
-  const lines = component.render(12);
-  assert.ok(lines.every((line: string) => visibleWidth(line) <= 12));
-  assert.ok(lines.some((line: string) => line.startsWith("│ ◆ ")));
+  for (const width of [12, 20, 47, 80]) {
+    const lines = component.render(width);
+    assert.ok(lines.every((line: string) => visibleWidth(line) === width));
+    assert.ok(
+      !lines.some(
+        (line: string) => line.includes("◆") || line.includes("模型"),
+      ),
+    );
+    if (width >= 20) {
+      assert.ok(lines.some((line: string) => line.includes("Active tools:")));
+    }
+    if (width === 80) {
+      assert.ok(
+        lines.some((line: string) =>
+          line.includes("工具👨‍👩‍👧‍👦-with-a-very-long-label"),
+        ),
+      );
+    }
+  }
 });
 
 test("detailed RPC widgets refresh on tool lifecycle events without periodic updates", async () => {
@@ -393,7 +423,12 @@ test("detailed RPC widgets refresh on tool lifecycle events without periodic upd
   assert.ok(
     (widget?.[2] as string[]).every((line) => visibleWidth(line) <= 120),
   );
-  assert.ok((widget?.[2] as string[]).some((line) => line.includes("⚙ bash")));
+  assert.ok(
+    (widget?.[2] as string[]).some((line) =>
+      line.includes("Active tools: bash"),
+    ),
+  );
+  assert.ok(!(widget?.[2] as string[]).some((line) => line.includes("模型")));
 
   const widgetRefreshes = calls.filter((call) => call[0] === "widget").length;
   await new Promise((resolve) => setTimeout(resolve, 450));
@@ -410,6 +445,11 @@ test("detailed RPC widgets refresh on tool lifecycle events without periodic upd
     calls.filter((call) => call[0] === "widget").length,
     widgetRefreshes + 1,
   );
+  const idle = calls
+    .filter((call) => call[0] === "widget")
+    .at(-1)?.[2] as string[];
+  assert.ok(idle.some((line) => line.includes("Active tools: none")));
+  assert.ok(!idle.some((line) => line.includes("bash")));
 });
 
 test("accepted rail rendering reads the current public context theme", () => {
@@ -445,7 +485,6 @@ test("accepted rail rendering reads the current public context theme", () => {
   assert.deepEqual([...new Set(current.roles)].sort(), [
     "accent",
     "border",
-    "dim",
     "muted",
     "text",
   ]);
@@ -471,7 +510,6 @@ test("widget fallback uses its factory callback theme rather than a stale contex
   assert.deepEqual([...new Set(callbackTheme.roles)].sort(), [
     "accent",
     "border",
-    "dim",
     "muted",
     "text",
   ]);
@@ -489,7 +527,6 @@ test("RPC rendering reads the current public context theme on every refresh", ()
   assert.deepEqual([...new Set(first.roles)].sort(), [
     "accent",
     "border",
-    "dim",
     "muted",
     "text",
   ]);
@@ -502,7 +539,6 @@ test("RPC rendering reads the current public context theme on every refresh", ()
   assert.deepEqual([...new Set(next.roles)].sort(), [
     "accent",
     "border",
-    "dim",
     "muted",
     "text",
   ]);
