@@ -160,6 +160,8 @@ export interface TelemetryRenderOptions {
   theme?: Theme;
   spotify?: SpotifySnapshot;
   now?: number;
+  /** Latest event-driven process-wide RSS sample, not conversation memory. */
+  rssBytes?: number;
 }
 
 function formatCompactNumber(value: number): string {
@@ -235,7 +237,7 @@ function fillToWidth(value: string, width: number, styled: boolean): string {
   return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
 
-type TelemetryRole = "accent" | "border" | "dim" | "muted" | "text";
+type TelemetryRole = "accent" | "border" | "dim" | "muted" | "text" | "error";
 
 function telemetryRole(
   theme: Theme | undefined,
@@ -284,6 +286,18 @@ function renderTelemetryCard(
   ];
 }
 
+function pairedMetrics(left: string, right: string, width: number): string[] {
+  const leftWidth = visibleWidth(left);
+  const rightWidth = visibleWidth(right);
+  if (leftWidth + 2 + rightWidth > width) return [left, right];
+  const columnWidth = Math.max(leftWidth, Math.floor((width - 2) / 2));
+  const padding = Math.min(
+    columnWidth - leftWidth + 2,
+    width - leftWidth - rightWidth,
+  );
+  return [`${left}${" ".repeat(padding)}${right}`];
+}
+
 /** Render complementary finalized usage and activity in a width-safe Nox card. */
 export function renderDetailedTelemetry({
   telemetry,
@@ -292,46 +306,78 @@ export function renderDetailedTelemetry({
   theme,
   spotify,
   now,
+  rssBytes,
 }: TelemetryRenderOptions): string[] {
-  const { usage, counts } = telemetry;
+  const { usage, context } = telemetry;
   const tools = activeToolNames(activeTools);
 
   return renderTelemetryCard(
     [
-      telemetryMetric(theme, "Input tokens:", formatCompactNumber(usage.input)),
+      telemetryRole(theme, "muted", "TOKENS"),
+      ...pairedMetrics(
+        telemetryMetric(theme, "Input:", formatCompactNumber(usage.input)),
+        telemetryMetric(theme, "Output:", formatCompactNumber(usage.output)),
+        maxWidth - 4,
+      ),
+      "",
+      telemetryRole(theme, "muted", "CACHE"),
+      ...pairedMetrics(
+        telemetryMetric(theme, "Read:", formatCompactNumber(usage.cacheRead)),
+        telemetryMetric(theme, "Write:", formatCompactNumber(usage.cacheWrite)),
+        maxWidth - 4,
+      ),
+      "",
+      telemetryRole(theme, "muted", "SESSION"),
       telemetryMetric(
         theme,
-        "Output tokens:",
-        formatCompactNumber(usage.output),
+        "Pi RAM:",
+        typeof rssBytes === "number" &&
+          Number.isFinite(rssBytes) &&
+          rssBytes >= 0
+          ? `${formatDecimal(rssBytes / 1048576)} MiB`
+          : "—",
       ),
       telemetryMetric(
         theme,
-        "Cache reads:",
-        formatCompactNumber(usage.cacheRead),
-      ),
-      telemetryMetric(
-        theme,
-        "Cache writes:",
-        formatCompactNumber(usage.cacheWrite),
-      ),
-      telemetryMetric(theme, "Message entries:", String(counts.messageEntries)),
-      telemetryMetric(theme, "Assistant turns:", String(counts.assistantTurns)),
-      telemetryMetric(
-        theme,
-        "Active tools:",
+        "Tools:",
         tools.length === 0 ? "none" : tools.join(", "),
       ),
+      ...(typeof context.percent === "number" &&
+      Number.isFinite(context.percent) &&
+      context.percent >= 80 &&
+      context.percent <= 100
+        ? [
+            telemetryRole(
+              theme,
+              "border",
+              "─".repeat(Math.max(0, maxWidth - 4)),
+            ),
+            telemetryRole(
+              theme,
+              "error",
+              `⚠ Context ${formatDecimal(context.percent)}%`,
+            ),
+            telemetryRole(theme, "error", "Start a new session"),
+          ]
+        : []),
       ...(spotifyLabel(spotify, now)
         ? (() => {
             const label = spotifyLabel(spotify, now) ?? "";
             const separator = label.indexOf(" · ");
-            if (separator < 0) return [telemetryRole(theme, "accent", label)];
+            const rule = telemetryRole(
+              theme,
+              "border",
+              "─".repeat(Math.max(0, maxWidth - 4)),
+            );
+            if (separator < 0)
+              return [rule, telemetryRole(theme, "accent", label)];
             const detail = label.slice(separator + 3);
             const marker =
               detail.startsWith("▶") || detail.startsWith("⏸")
                 ? detail.slice(0, 1)
                 : "";
             return [
+              rule,
               `${telemetryRole(theme, "accent", "Spotify")} ${telemetryRole(theme, "muted", "·")} ${telemetryRole(theme, "text", marker || "—")}`,
               telemetryRole(theme, "text", marker ? detail.slice(2) : detail),
             ];
