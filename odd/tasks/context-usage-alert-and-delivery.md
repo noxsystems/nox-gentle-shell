@@ -2,11 +2,11 @@
 
 ## Objective
 
-Resume the completed-but-uncommitted rail telemetry work, add a non-spamming context-usage threshold alert, create the two authorized work-unit commits, and only then exercise the local development updater.
+Track the context-usage alert and historical delivery evidence. Nox delivery is verified; historical authorization, host delivery, review, and updater completion remain unverified.
 
 ## Background
 
-The rail telemetry/card and Gentle Prompt lunar work are implemented and verified but remain uncommitted in two repositories:
+The original work covered rail telemetry/card and Gentle Prompt lunar changes in two repositories. Nox was subsequently committed and merged; the Gentle Pi state has not been verified in this reconciliation:
 
 - Nox: `/home/jesus/Freelance/nox-gentle-shell`
 - Gentle Pi local host: `/home/jesus/code/gentle-pi`
@@ -73,7 +73,7 @@ Non-goals: no critical threshold, metric recoloring, telemetry/card/prompt/fulls
 ### CUA-4 — Create work-unit commits
 
 - [ ] Obtain explicit commit authorization.
-- [ ] Create one Conventional Commit for the complete Nox visual/context-alert work unit.
+- [x] Create one Conventional Commit for the complete Nox visual/context-alert work unit: `43449e6 feat(shell): add themed telemetry and context alerts`.
 - [ ] Create one separate local-only Conventional Commit for the Gentle Pi width-contract/lunar-prompt host work.
 - [ ] Record both commit hashes and verify both worktrees contain only intentional untracked files.
 - [ ] Do not push or create PRs unless separately authorized.
@@ -102,9 +102,10 @@ Non-goals: no critical threshold, metric recoloring, telemetry/card/prompt/fulls
 
 - CUA-2 policy is confirmed: one warning at valid `>=80%`, rearmed only by valid `<75%`; missing context never alerts or rearms.
 - CUA-3 RED was observed for the new behavior tests before runtime implementation. Focused GREEN and refactor validation passed after implementation.
-- Existing rail telemetry/card work remains uncommitted and preserved.
+- Verified Nox delivery: `43449e6 feat(shell): add themed telemetry and context alerts`, merged via `efd7ada` (PR #7). The initial `main` for the card cleanup was clean at `d8cbb2f`.
+- Historical explicit commit authorization, LSP/independent/native review, Gentle Pi worktree/commit state, and updater completion are unknown; their unchecked items remain unresolved.
 - Focused runtime tests passed 23/23; the full Nox suite passed 72/72; `npm run build` and `git diff --check` passed. LSP, independent verification, and native review remain parent-owned and incomplete.
 
 ## Next Step
 
-Leave LSP diagnostics, independent verification, and native review to the parent. Do not commit without separate authorization.
+Nox commit creation is complete. Leave unverified historical review, authorization, Gentle Pi delivery, and updater items unchecked; no cross-repository inspection was performed. Current card-cleanup review and any new commit authorization belong to the parent.
