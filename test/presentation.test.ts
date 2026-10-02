@@ -322,7 +322,7 @@ test("compact telemetry is safe when its Unicode context segment alone must trun
   assertWidth(output, 2);
 });
 
-test("detailed telemetry is one icon-led bordered card with a static title that remains width-safe", () => {
+test("detailed telemetry is one labeled bordered card with a static title that remains width-safe", () => {
   const telemetry = {
     context: { tokens: 53_800, contextWindow: 128_000, percent: 42 },
     usage: {
@@ -363,37 +363,55 @@ test("detailed telemetry is one icon-led bordered card with a static title that 
   });
   assert.ok(activeCard[0]?.startsWith("┌─ Nox 🌑 "));
   assert.ok(idleCard[0]?.startsWith("┌─ Nox 🌑 "));
-  assert.ok(activeCard.some((line) => line.includes("⚙ bash")));
-  assert.ok(
-    !activeCard.some((line) => /\b(context|usage|cost|tools)\b/.test(line)),
-  );
+  assert.ok(activeCard.some((line) => line.includes("Active tools: bash")));
+  assert.ok(idleCard.some((line) => line.includes("Active tools: none")));
 });
 
-test("detailed telemetry renders the model as an exact icon-led row without a label", () => {
+test("detailed telemetry excludes host duplicates even with populated fields", () => {
   const model = "openai-codex/gpt-5.6-sol";
   const lines = renderDetailedTelemetry({
     telemetry: {
-      context: { tokens: 0, contextWindow: 128_000, percent: 0 },
+      context: { tokens: 53_800, contextWindow: 128_000, percent: 42 },
       usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: 0,
+        input: 18_200,
+        output: 3_100,
+        cacheRead: 9_400,
+        cacheWrite: 2_100,
+        totalTokens: 32_800,
+        cost: 12.34,
       },
-      counts: { messageEntries: 0, assistantTurns: 0 },
+      counts: { messageEntries: 9, assistantTurns: 7 },
     },
     activeTools: {},
     maxWidth: 80,
     model,
   });
 
-  assert.ok(!lines.some((line) => line.includes("model ")));
-  assert.ok(lines.some((line) => line.slice(1, -1).trim() === `◆ ${model}`));
+  const card = lines.join("\n");
+  for (const duplicate of [
+    model,
+    "53.8k",
+    "128k",
+    "42%",
+    "$12.34",
+    "Context",
+    "Cost",
+  ]) {
+    assert.ok(!card.includes(duplicate), `Host duplicate absent: ${duplicate}`);
+  }
+  for (const metric of [
+    "Input tokens: 18.2k",
+    "Output tokens: 3.1k",
+    "Cache reads: 9.4k",
+    "Cache writes: 2.1k",
+    "Message entries: 9",
+    "Assistant turns: 7",
+  ]) {
+    assert.ok(card.includes(metric), `Labeled metric present: ${metric}`);
+  }
 });
 
-test("detailed telemetry permits a custom model symbol", () => {
+test("detailed telemetry retains readable labels despite custom symbols", () => {
   const model = "nox/custom-model";
   const lines = renderDetailedTelemetry({
     telemetry: {
@@ -422,10 +440,11 @@ test("detailed telemetry permits a custom model symbol", () => {
     },
   });
 
-  assert.ok(lines.some((line) => line.slice(1, -1).trim() === `M ${model}`));
+  assert.ok(!lines.some((line) => line.includes(model)));
+  assert.ok(lines.some((line) => line.includes("Input tokens: 0")));
 });
 
-test("detailed telemetry labels finalized totals and unavailable context", () => {
+test("detailed telemetry labels zero finalized totals without unavailable context", () => {
   const lines = renderDetailedTelemetry({
     telemetry: {
       context: { tokens: null, contextWindow: 128_000, percent: null },
@@ -443,10 +462,17 @@ test("detailed telemetry labels finalized totals and unavailable context", () =>
     maxWidth: 100,
   });
 
-  assert.ok(lines.some((line) => line.includes("◉ unavailable")));
-  assert.ok(lines.some((line) => line.includes("↑ 0") && line.includes("◇ 0")));
-  assert.ok(lines.some((line) => line.includes("$ $0.00")));
-  assert.ok(lines.some((line) => line.includes("◌ 1")));
+  assert.ok(!lines.some((line) => /unavailable|128k|\$/.test(line)));
+  for (const label of [
+    "Input tokens: 0",
+    "Output tokens: 0",
+    "Cache reads: 0",
+    "Cache writes: 0",
+    "Message entries: 3",
+    "Assistant turns: 1",
+  ]) {
+    assert.ok(lines.some((line) => line.includes(label)));
+  }
 });
 
 test("detailed telemetry uses active semantic roles with a titled padded frame", () => {
@@ -484,7 +510,6 @@ test("detailed telemetry uses active semantic roles with a titled padded frame",
   assert.deepEqual([...new Set(roles.map(({ role }) => role))].sort(), [
     "accent",
     "border",
-    "dim",
     "muted",
     "text",
   ]);
@@ -494,10 +519,13 @@ test("detailed telemetry uses active semantic roles with a titled padded frame",
   assert.ok(
     roles.some(({ role, text }) => role === "accent" && text === "Nox 🌑"),
   );
-  assert.ok(roles.some(({ role, text }) => role === "muted" && text === "◆"));
-  assert.ok(roles.some(({ role, text }) => role === "dim" && text === " · "));
   assert.ok(
-    roles.some(({ role, text }) => role === "text" && text.includes("nox/")),
+    roles.some(
+      ({ role, text }) => role === "muted" && text === "Input tokens:",
+    ),
+  );
+  assert.ok(
+    roles.some(({ role, text }) => role === "text" && text === "18.2k"),
   );
   assert.ok(
     card.slice(1, -1).every((line) => stripAnsi(line).startsWith("│ ")),
@@ -591,8 +619,8 @@ test("Spotify card separates status and track while retaining telemetry without 
       card.filter((line) => stripAnsi(line).includes("┌")).length,
       maxWidth >= 2 ? 1 : 0,
     );
-    if (maxWidth >= 8)
-      assert.ok(card.some((line) => stripAnsi(line).includes("◉")));
+    if (maxWidth >= 20)
+      assert.ok(card.some((line) => stripAnsi(line).includes("Input tokens:")));
   }
   const full = stripAnsi(
     renderDetailedTelemetry({
@@ -611,6 +639,7 @@ test("Spotify card separates status and track while retaining telemetry without 
     spotify,
     { ...spotify, playback: { ...spotify.playback, is_playing: true } },
     { playback: null, updatedAt: 1000 },
+    { playback: null, updatedAt: 1000, error: "Playback unavailable" },
   ]) {
     const rows = renderDetailedTelemetry({
       telemetry,
@@ -621,13 +650,25 @@ test("Spotify card separates status and track while retaining telemetry without 
     });
     const statusRow = rows.findIndex((line) => line.includes("Spotify"));
     const detailRow = rows.findIndex((line) =>
-      line.includes(state.playback ? "Long 🎵 song" : "No active playback"),
+      line.includes(
+        "error" in state
+          ? state.error!
+          : state.playback
+            ? "Long 🎵 song"
+            : "No active playback",
+      ),
     );
     assert.ok(
       statusRow >= 0 && detailRow > statusRow,
       "status and detail occupy distinct rows",
     );
   }
+  const disabled = renderDetailedTelemetry({
+    telemetry,
+    activeTools: {},
+    maxWidth: 80,
+  });
+  assert.ok(!disabled.some((line) => line.includes("Spotify")));
 });
 
 describe("Edge cases and Matrix testing", () => {

@@ -253,10 +253,6 @@ function telemetryMetric(
   return `${telemetryRole(theme, "muted", glyph)} ${telemetryRole(theme, "text", value)}`;
 }
 
-function telemetrySeparator(theme: Theme | undefined): string {
-  return telemetryRole(theme, "dim", " · ");
-}
-
 function renderTelemetryCard(
   lines: string[],
   maxWidth: number,
@@ -288,52 +284,43 @@ function renderTelemetryCard(
   ];
 }
 
-/** Render finalized telemetry as a width-safe, icon-led Nox card. */
+/** Render complementary finalized usage and activity in a width-safe Nox card. */
 export function renderDetailedTelemetry({
   telemetry,
   activeTools,
   maxWidth,
-  model,
-  symbols = DEFAULT_TELEMETRY_SYMBOLS,
   theme,
   spotify,
   now,
 }: TelemetryRenderOptions): string[] {
-  const { context, usage, counts } = telemetry;
-  const contextValue =
-    context.tokens === null
-      ? `unavailable${context.contextWindow === null ? "" : ` / ${formatCompactNumber(context.contextWindow)}`}`
-      : `${formatCompactNumber(context.tokens)} / ${context.contextWindow === null ? "—" : formatCompactNumber(context.contextWindow)} (${context.percent === null ? "—" : `${formatDecimal(context.percent)}%`})`;
+  const { usage, counts } = telemetry;
   const tools = activeToolNames(activeTools);
-  const modelSymbol = symbols.model ?? DEFAULT_TELEMETRY_SYMBOLS.model ?? "◆";
 
   return renderTelemetryCard(
     [
-      ...(model ? [telemetryMetric(theme, modelSymbol, model ?? "")] : []),
-      telemetryMetric(theme, symbols.context, contextValue),
-      [
-        telemetryMetric(theme, symbols.input, formatCompactNumber(usage.input)),
-        telemetryMetric(
-          theme,
-          symbols.output,
-          formatCompactNumber(usage.output),
-        ),
-        telemetryMetric(
-          theme,
-          symbols.cache,
-          formatCompactNumber(usage.cacheRead + usage.cacheWrite),
-        ),
-      ].join(telemetrySeparator(theme)),
-      telemetryMetric(theme, symbols.cost, formatMoney(usage.cost)),
-      [
-        telemetryMetric(theme, "✉", String(counts.messageEntries)),
-        telemetryMetric(theme, "◌", String(counts.assistantTurns)),
-        telemetryMetric(
-          theme,
-          symbols.tools,
-          tools.length === 0 ? "—" : tools.join(", "),
-        ),
-      ].join(telemetrySeparator(theme)),
+      telemetryMetric(theme, "Input tokens:", formatCompactNumber(usage.input)),
+      telemetryMetric(
+        theme,
+        "Output tokens:",
+        formatCompactNumber(usage.output),
+      ),
+      telemetryMetric(
+        theme,
+        "Cache reads:",
+        formatCompactNumber(usage.cacheRead),
+      ),
+      telemetryMetric(
+        theme,
+        "Cache writes:",
+        formatCompactNumber(usage.cacheWrite),
+      ),
+      telemetryMetric(theme, "Message entries:", String(counts.messageEntries)),
+      telemetryMetric(theme, "Assistant turns:", String(counts.assistantTurns)),
+      telemetryMetric(
+        theme,
+        "Active tools:",
+        tools.length === 0 ? "none" : tools.join(", "),
+      ),
       ...(spotifyLabel(spotify, now)
         ? (() => {
             const label = spotifyLabel(spotify, now) ?? "";
