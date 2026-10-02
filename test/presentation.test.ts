@@ -322,7 +322,7 @@ test("compact telemetry is safe when its Unicode context segment alone must trun
   assertWidth(output, 2);
 });
 
-test("detailed telemetry is one icon-led bordered card with a static title that remains width-safe", () => {
+test("detailed telemetry is one labeled bordered card with a static title that remains width-safe", () => {
   const telemetry = {
     context: { tokens: 53_800, contextWindow: 128_000, percent: 42 },
     usage: {
@@ -363,37 +363,59 @@ test("detailed telemetry is one icon-led bordered card with a static title that 
   });
   assert.ok(activeCard[0]?.startsWith("┌─ Nox 🌑 "));
   assert.ok(idleCard[0]?.startsWith("┌─ Nox 🌑 "));
-  assert.ok(activeCard.some((line) => line.includes("⚙ bash")));
-  assert.ok(
-    !activeCard.some((line) => /\b(context|usage|cost|tools)\b/.test(line)),
-  );
+  assert.ok(activeCard.some((line) => line.includes("Tools: bash")));
+  assert.ok(idleCard.some((line) => line.includes("Tools: none")));
 });
 
-test("detailed telemetry renders the model as an exact icon-led row without a label", () => {
+test("detailed telemetry excludes host duplicates even with populated fields", () => {
   const model = "openai-codex/gpt-5.6-sol";
   const lines = renderDetailedTelemetry({
     telemetry: {
-      context: { tokens: 0, contextWindow: 128_000, percent: 0 },
+      context: { tokens: 53_800, contextWindow: 128_000, percent: 42 },
       usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: 0,
+        input: 18_200,
+        output: 3_100,
+        cacheRead: 9_400,
+        cacheWrite: 2_100,
+        totalTokens: 32_800,
+        cost: 12.34,
       },
-      counts: { messageEntries: 0, assistantTurns: 0 },
+      counts: { messageEntries: 9, assistantTurns: 7 },
     },
     activeTools: {},
     maxWidth: 80,
     model,
   });
 
-  assert.ok(!lines.some((line) => line.includes("model ")));
-  assert.ok(lines.some((line) => line.slice(1, -1).trim() === `◆ ${model}`));
+  const card = lines.join("\n");
+  for (const duplicate of [
+    model,
+    "53.8k",
+    "128k",
+    "42%",
+    "$12.34",
+    "Context",
+    "Cost",
+    "Message entries",
+    "Assistant turns",
+  ]) {
+    assert.ok(!card.includes(duplicate), `Host duplicate absent: ${duplicate}`);
+  }
+  for (const metric of [
+    "TOKENS",
+    "CACHE",
+    "SESSION",
+    "Input: 18.2k",
+    "Output: 3.1k",
+    "Read: 9.4k",
+    "Write: 2.1k",
+    "Pi RAM: —",
+  ]) {
+    assert.ok(card.includes(metric), `Labeled metric present: ${metric}`);
+  }
 });
 
-test("detailed telemetry permits a custom model symbol", () => {
+test("detailed telemetry retains readable labels despite custom symbols", () => {
   const model = "nox/custom-model";
   const lines = renderDetailedTelemetry({
     telemetry: {
@@ -422,10 +444,11 @@ test("detailed telemetry permits a custom model symbol", () => {
     },
   });
 
-  assert.ok(lines.some((line) => line.slice(1, -1).trim() === `M ${model}`));
+  assert.ok(!lines.some((line) => line.includes(model)));
+  assert.ok(lines.some((line) => line.includes("Input: 0")));
 });
 
-test("detailed telemetry labels finalized totals and unavailable context", () => {
+test("detailed telemetry labels zero finalized totals without unavailable context", () => {
   const lines = renderDetailedTelemetry({
     telemetry: {
       context: { tokens: null, contextWindow: 128_000, percent: null },
@@ -443,10 +466,16 @@ test("detailed telemetry labels finalized totals and unavailable context", () =>
     maxWidth: 100,
   });
 
-  assert.ok(lines.some((line) => line.includes("◉ unavailable")));
-  assert.ok(lines.some((line) => line.includes("↑ 0") && line.includes("◇ 0")));
-  assert.ok(lines.some((line) => line.includes("$ $0.00")));
-  assert.ok(lines.some((line) => line.includes("◌ 1")));
+  assert.ok(!lines.some((line) => /unavailable|128k|\$/.test(line)));
+  for (const label of [
+    "Input: 0",
+    "Output: 0",
+    "Read: 0",
+    "Write: 0",
+    "Pi RAM: —",
+  ]) {
+    assert.ok(lines.some((line) => line.includes(label)));
+  }
 });
 
 test("detailed telemetry uses active semantic roles with a titled padded frame", () => {
@@ -484,7 +513,6 @@ test("detailed telemetry uses active semantic roles with a titled padded frame",
   assert.deepEqual([...new Set(roles.map(({ role }) => role))].sort(), [
     "accent",
     "border",
-    "dim",
     "muted",
     "text",
   ]);
@@ -494,10 +522,11 @@ test("detailed telemetry uses active semantic roles with a titled padded frame",
   assert.ok(
     roles.some(({ role, text }) => role === "accent" && text === "Nox 🌑"),
   );
-  assert.ok(roles.some(({ role, text }) => role === "muted" && text === "◆"));
-  assert.ok(roles.some(({ role, text }) => role === "dim" && text === " · "));
   assert.ok(
-    roles.some(({ role, text }) => role === "text" && text.includes("nox/")),
+    roles.some(({ role, text }) => role === "muted" && text === "Input:"),
+  );
+  assert.ok(
+    roles.some(({ role, text }) => role === "text" && text === "18.2k"),
   );
   assert.ok(
     card.slice(1, -1).every((line) => stripAnsi(line).startsWith("│ ")),
@@ -591,8 +620,8 @@ test("Spotify card separates status and track while retaining telemetry without 
       card.filter((line) => stripAnsi(line).includes("┌")).length,
       maxWidth >= 2 ? 1 : 0,
     );
-    if (maxWidth >= 8)
-      assert.ok(card.some((line) => stripAnsi(line).includes("◉")));
+    if (maxWidth >= 20)
+      assert.ok(card.some((line) => stripAnsi(line).includes("Input:")));
   }
   const full = stripAnsi(
     renderDetailedTelemetry({
@@ -611,6 +640,7 @@ test("Spotify card separates status and track while retaining telemetry without 
     spotify,
     { ...spotify, playback: { ...spotify.playback, is_playing: true } },
     { playback: null, updatedAt: 1000 },
+    { playback: null, updatedAt: 1000, error: "Playback unavailable" },
   ]) {
     const rows = renderDetailedTelemetry({
       telemetry,
@@ -621,12 +651,184 @@ test("Spotify card separates status and track while retaining telemetry without 
     });
     const statusRow = rows.findIndex((line) => line.includes("Spotify"));
     const detailRow = rows.findIndex((line) =>
-      line.includes(state.playback ? "Long 🎵 song" : "No active playback"),
+      line.includes(
+        "error" in state
+          ? state.error!
+          : state.playback
+            ? "Long 🎵 song"
+            : "No active playback",
+      ),
     );
     assert.ok(
       statusRow >= 0 && detailRow > statusRow,
       "status and detail occupy distinct rows",
     );
+  }
+  const stale = renderDetailedTelemetry({
+    telemetry,
+    activeTools: {},
+    maxWidth: 80,
+    spotify: {
+      ...spotify,
+      playback: { ...spotify.playback, is_playing: true },
+    },
+    now: 100000,
+  });
+  assert.ok(
+    stale.some((row) => row.includes("0:10/0:10")),
+    "old playback retains duration-clamped progress",
+  );
+  const separated = renderDetailedTelemetry({
+    telemetry,
+    activeTools: {},
+    maxWidth: 80,
+    spotify,
+    now: 5000,
+  });
+  const spotifyRow = separated.findIndex((row) => row.includes("Spotify"));
+  assert.match(separated[spotifyRow - 1]!, /^│ ─+ │$/);
+  const disabled = renderDetailedTelemetry({
+    telemetry,
+    activeTools: {},
+    maxWidth: 80,
+  });
+  assert.ok(!disabled.some((line) => line.includes("Spotify")));
+});
+
+const groupedTelemetry = {
+  context: { tokens: 0, contextWindow: 100, percent: 0 as number | null },
+  usage: {
+    input: 18200,
+    output: 3100,
+    cacheRead: 9400,
+    cacheWrite: 2100,
+    totalTokens: 32800,
+    cost: 12.34,
+  },
+  counts: { messageEntries: 9, assistantTurns: 7 },
+};
+
+test("grouped pairs stack when the actual content budget is too narrow", () => {
+  for (const maxWidth of [12, 20, 24, 32, 47, 80]) {
+    for (const theme of [undefined, createMockTheme()]) {
+      const rows = renderDetailedTelemetry({
+        telemetry: groupedTelemetry,
+        activeTools: { a: { toolCallId: "a", toolName: "工具🌑" } },
+        maxWidth,
+        theme,
+      });
+      assert.ok(rows.every((row) => visibleWidth(row) === maxWidth));
+      const plain = rows.map(stripAnsi);
+      const paired = plain.some(
+        (row) => row.includes("Input:") && row.includes("Output:"),
+      );
+      assert.equal(paired, maxWidth >= 32);
+      if (maxWidth >= 20 && maxWidth < 32) {
+        assert.ok(plain.some((row) => row.includes("Input: 18.2k")));
+        assert.ok(plain.some((row) => row.includes("Output: 3.1k")));
+        assert.ok(plain.some((row) => row.includes("Read: 9.4k")));
+        assert.ok(plain.some((row) => row.includes("Write: 2.1k")));
+      }
+      assert.equal(plain.filter((row) => /^│ +│$/.test(row)).length, 2);
+    }
+  }
+});
+
+test("RSS is neutral and unavailable values never invent memory", () => {
+  for (const rssBytes of [undefined, -1, NaN, Infinity, 0, 1048576, 1572864]) {
+    const roles: Array<[string, string]> = [];
+    const theme = {
+      ...createMockTheme(),
+      fg: (role: string, text: string) => {
+        roles.push([role, text]);
+        return text;
+      },
+    } as Theme;
+    const card = renderDetailedTelemetry({
+      telemetry: groupedTelemetry,
+      activeTools: {},
+      maxWidth: 80,
+      rssBytes,
+      theme,
+    }).join("\n");
+    const valid =
+      rssBytes !== undefined && Number.isFinite(rssBytes) && rssBytes >= 0;
+    assert.ok(
+      card.includes(`Pi RAM: ${valid ? `${rssBytes / 1048576} MiB` : "—"}`),
+    );
+    assert.ok(!roles.some(([role]) => role === "error" || role === "warning"));
+  }
+});
+
+test("context block is conditional, with both lines in the semantic error role", () => {
+  for (const percent of [
+    79.9,
+    80,
+    84,
+    100,
+    null,
+    undefined,
+    NaN,
+    Infinity,
+    -1,
+    100.1,
+  ]) {
+    const roles: Array<[string, string]> = [];
+    const theme = {
+      ...createMockTheme(),
+      fg: (role: string, text: string) => {
+        roles.push([role, text]);
+        return text;
+      },
+    } as Theme;
+    const telemetry = {
+      ...groupedTelemetry,
+      context: { ...groupedTelemetry.context, percent },
+    };
+    const rows = renderDetailedTelemetry({
+      telemetry: telemetry as never,
+      activeTools: {},
+      maxWidth: 80,
+      theme,
+    });
+    const shown =
+      typeof percent === "number" &&
+      Number.isFinite(percent) &&
+      percent >= 80 &&
+      percent <= 100;
+    assert.equal(
+      rows.some((row) => row.includes("Start a new session")),
+      shown,
+    );
+    assert.equal(
+      rows.some((row) => row.includes("⚠ Context")),
+      shown,
+    );
+    assert.equal(
+      rows.filter(
+        (row) =>
+          row.includes("──") && !row.startsWith("┌") && !row.startsWith("└"),
+      ).length,
+      shown ? 1 : 0,
+    );
+    assert.deepEqual(
+      roles.filter(([role]) => role === "error"),
+      shown
+        ? [
+            ["error", `⚠ Context ${percent}%`],
+            ["error", "Start a new session"],
+          ]
+        : [],
+    );
+    for (const maxWidth of [12, 20, 24, 32, 47, 80]) {
+      const narrow = renderDetailedTelemetry({
+        telemetry: telemetry as never,
+        activeTools: {},
+        maxWidth,
+        theme: createMockTheme(),
+      });
+      assert.ok(narrow.every((row) => visibleWidth(row) === maxWidth));
+    }
   }
 });
 

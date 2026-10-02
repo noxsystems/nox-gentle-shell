@@ -96,8 +96,10 @@ export interface VisualController {
 export function createVisualController(
   events?: FullscreenContributionEvents,
   spotify?: SpotifyController,
+  sampleRss: () => number | undefined = () => process.memoryUsage().rss,
 ): VisualController {
   let state = emptyState();
+  let rssBytes: number | undefined;
   let contextWarningArmed = true;
   const fullscreenContribution = createFullscreenContributionClient(events);
   const spotifyController =
@@ -127,6 +129,15 @@ export function createVisualController(
   };
 
   const refreshSnapshot = (ctx: ExtensionContext) => {
+    try {
+      const sample = sampleRss();
+      rssBytes =
+        typeof sample === "number" && Number.isFinite(sample) && sample >= 0
+          ? sample
+          : undefined;
+    } catch {
+      rssBytes = undefined;
+    }
     state = {
       ...state,
       telemetry: aggregateTelemetry(
@@ -196,6 +207,7 @@ export function createVisualController(
           activeTools: state.activeTools,
           model: state.model,
           maxWidth: railRenderWidth(width),
+          rssBytes,
           theme: ctx.ui.theme,
           spotify: ctx.mode === "tui" ? spotifyController.snapshot : undefined,
         });
@@ -218,6 +230,7 @@ export function createVisualController(
                     activeTools: state.activeTools,
                     model: state.model,
                     maxWidth: railRenderWidth(width),
+                    rssBytes,
                     theme,
                     spotify: spotifyController.snapshot,
                   }),
@@ -332,6 +345,7 @@ export function createVisualController(
       spotifyController.dispose();
       lastContext = undefined;
       state = emptyState();
+      rssBytes = undefined;
       contextWarningArmed = true;
     },
   };
