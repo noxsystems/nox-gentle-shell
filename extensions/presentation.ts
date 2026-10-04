@@ -162,6 +162,7 @@ export interface TelemetryRenderOptions {
   now?: number;
   /** Latest event-driven process-wide RSS sample, not conversation memory. */
   rssBytes?: number;
+  processMemory?: { lspBytes?: number; treeBytes?: number };
 }
 
 function formatCompactNumber(value: number): string {
@@ -307,6 +308,7 @@ export function renderDetailedTelemetry({
   spotify,
   now,
   rssBytes,
+  processMemory,
 }: TelemetryRenderOptions): string[] {
   const { usage, context } = telemetry;
   const tools = activeToolNames(activeTools);
@@ -336,6 +338,20 @@ export function renderDetailedTelemetry({
           rssBytes >= 0
           ? `${formatDecimal(rssBytes / 1048576)} MiB`
           : "—",
+      ),
+      ...(
+        [
+          ["LSP RAM:", processMemory?.lspBytes],
+          ["Tree RAM ≈:", processMemory?.treeBytes],
+        ] as const
+      ).map(([label, bytes]) =>
+        telemetryMetric(
+          theme,
+          label,
+          typeof bytes === "number" && Number.isFinite(bytes) && bytes >= 0
+            ? `${formatDecimal(bytes / 1048576)} MiB`
+            : "—",
+        ),
       ),
       telemetryMetric(
         theme,
