@@ -782,6 +782,155 @@ test("off clears every owned surface and cleanup drops stale telemetry and activ
   });
 });
 
+test("async memory coalesces, caches without redraw and ignores old lifetime completion", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const { ctx, calls } = createContext();
+  let samples = 0;
+  const pending: Array<
+    (value: { lspBytes?: number; treeBytes?: number }) => void
+  > = [];
+  const controller = createVisualController(
+    undefined,
+    createSpotifyController({ clientId: "" }),
+    () => 1048576,
+    () => {
+      samples++;
+      return new Promise((resolve) => pending.push(resolve));
+    },
+  );
+  const render = () => {
+    const factory = calls
+      .filter(([surface]) => surface === "widget")
+      .at(-1)?.[2] as Function;
+    return factory({}, { fg: (_role: string, text: string) => text })
+      .render(80)
+      .join("\n");
+  };
+  controller.start(ctx as never);
+  assert.equal(samples, 0);
+  controller.setMode("detailed", ctx as never);
+  controller.refresh(ctx as never);
+  assert.equal(samples, 1);
+  const count = calls.length;
+  render();
+  render();
+  assert.equal(samples, 1);
+  pending.shift()!({ lspBytes: 0, treeBytes: 2097152 });
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  assert.equal(calls.length, count, "completion never redraws widgets");
+  assert.match(render(), /LSP RAM: 0 MiB/);
+  assert.match(render(), /Tree RAM ≈: 2 MiB/);
+  controller.refresh(ctx as never);
+  assert.equal(samples, 1, "five-second throttle");
+  now = 4999;
+  controller.refresh(ctx as never);
+  assert.equal(samples, 1);
+  now = 5000;
+  controller.refresh(ctx as never);
+  assert.equal(samples, 2);
+  pending.shift()!({});
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  assert.match(render(), /LSP RAM: —/, "failed scans discard known readings");
+  controller.cleanup(ctx as never);
+  controller.start(ctx as never);
+  controller.setMode("detailed", ctx as never);
+  assert.equal(samples, 3);
+  controller.cleanup(ctx as never);
+  controller.start(ctx as never);
+  controller.setMode("detailed", ctx as never);
+  assert.equal(samples, 3, "restart must retain actual in-flight ownership");
+  controller.start(ctx as never);
+  assert.equal(
+    samples,
+    3,
+    "start without cleanup must not overlap the old scan",
+  );
+  pending.shift()!({ lspBytes: 99, treeBytes: 99 });
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  assert.match(render(), /LSP RAM: —/);
+  controller.refresh(ctx as never);
+  assert.equal(samples, 4, "a new event may sample after the old work drains");
+  pending.shift()!({});
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  assert.match(render(), /Tree RAM ≈: —/);
+  controller.cleanup(ctx as never);
+});
+
+test("failed proc scan remains coalesced across throttle and lifetime reset until reads drain", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const { sampleProcessMemory } = await import(
+    "../extensions/process-memory.js"
+  );
+  const { ctx, calls } = createContext();
+  const releases: Array<() => void> = [];
+  let notifyBlocked!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    notifyBlocked = resolve;
+  });
+  let scans = 0;
+  let active = 0;
+  let scan: Promise<{}> | undefined;
+  const controller = createVisualController(
+    undefined,
+    createSpotifyController({ clientId: "" }),
+    () => 0,
+    () => {
+      scans++;
+      if (scans > 1) return Promise.resolve({});
+      scan = sampleProcessMemory({
+        platform: "linux",
+        rootPid: 1,
+        source: {
+          async list() {
+            return Array.from({ length: 8 }, (_, i) => String(i + 1));
+          },
+          async read(pid) {
+            if (pid === 1) throw new Error("metadata failed");
+            active++;
+            await new Promise<void>((resolve) => {
+              releases.push(resolve);
+              if (releases.length === 7) notifyBlocked();
+            });
+            active--;
+            return `${pid} (node) S 1 ${Array(17).fill(0).join(" ")} 123 0`;
+          },
+          async executable() {
+            return "/bin/node";
+          },
+        },
+      });
+      return scan;
+    },
+  );
+  try {
+    controller.start(ctx as never);
+    controller.setMode("detailed", ctx as never);
+    await blocked;
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    now = 5000;
+    controller.refresh(ctx as never);
+    assert.equal(scans, 1, "five seconds does not release busy reads");
+    controller.cleanup(ctx as never);
+    controller.start(ctx as never);
+    controller.setMode("detailed", ctx as never);
+    assert.equal(scans, 1, "new lifetime cannot overlap actual old work");
+    const count = calls.length;
+    releases.forEach((resolve) => resolve());
+    await scan;
+    await Promise.resolve();
+    assert.equal(active, 0);
+    assert.equal(calls.length, count, "drain completion never redraws");
+    controller.refresh(ctx as never);
+    assert.equal(scans, 2);
+  } finally {
+    releases.forEach((resolve) => resolve());
+    await scan;
+    controller.cleanup(ctx as never);
+  }
+});
+
 test("start, refresh, off, and shutdown never call singleton UI APIs", () => {
   const { ctx, calls } = createContext();
   const controller = createVisualController();
