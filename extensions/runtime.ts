@@ -24,6 +24,11 @@ import {
   type TelemetrySnapshot,
 } from "./telemetry.js";
 
+import {
+  sampleProcessMemory,
+  type ProcessMemorySnapshot,
+} from "./process-memory.js";
+
 export type VisualMode = "compact" | "detailed" | "off";
 
 export interface VisualRuntimeState {
@@ -98,10 +103,44 @@ export function createVisualController(
   events?: FullscreenContributionEvents,
   spotify?: SpotifyController,
   sampleRss: () => number | undefined = () => process.memoryUsage().rss,
+  sampleMemory: () => Promise<ProcessMemorySnapshot> = sampleProcessMemory,
 ): VisualController {
   let state = emptyState();
   let lastVisibleMode: Exclude<VisualMode, "off"> = "compact";
   let rssBytes: number | undefined;
+  let processMemory: ProcessMemorySnapshot = {};
+  let memoryGeneration = 0;
+  let memoryInFlight = false;
+  let memoryLastScan = -Infinity;
+  const resetMemory = () => {
+    memoryGeneration++;
+    processMemory = {};
+    // Lifetime invalidation does not cancel or release actual scan ownership.
+    memoryLastScan = -Infinity;
+  };
+  const refreshMemory = (ctx: ExtensionContext) => {
+    if (
+      !ctx.hasUI ||
+      state.mode !== "detailed" ||
+      memoryInFlight ||
+      performance.now() - memoryLastScan < 5000
+    )
+      return;
+    memoryInFlight = true;
+    memoryLastScan = performance.now();
+    const generation = memoryGeneration;
+    // No completion-driven redraw: callbacks consume this cache on the next render.
+    const settle = (value: ProcessMemorySnapshot) => {
+      memoryInFlight = false;
+      if (generation !== memoryGeneration) return;
+      processMemory = value;
+    };
+    try {
+      void sampleMemory().then(settle, () => settle({}));
+    } catch {
+      settle({});
+    }
+  };
   let contextWarningArmed = true;
   const fullscreenContribution = createFullscreenContributionClient(events);
   const spotifyController =
@@ -131,6 +170,7 @@ export function createVisualController(
   };
 
   const refreshSnapshot = (ctx: ExtensionContext) => {
+    refreshMemory(ctx);
     try {
       const sample = sampleRss();
       rssBytes =
@@ -210,6 +250,7 @@ export function createVisualController(
           model: state.model,
           maxWidth: railRenderWidth(width),
           rssBytes,
+          processMemory,
           theme: ctx.ui.theme,
           spotify: ctx.mode === "tui" ? spotifyController.snapshot : undefined,
         });
@@ -233,6 +274,7 @@ export function createVisualController(
                     model: state.model,
                     maxWidth: railRenderWidth(width),
                     rssBytes,
+                    processMemory,
                     theme,
                     spotify: spotifyController.snapshot,
                   }),
@@ -274,6 +316,7 @@ export function createVisualController(
       closeSpotifyOverlay = close;
     },
     start(ctx) {
+      resetMemory();
       refreshSnapshot(ctx);
       evaluateContextWarning(ctx);
       syncSpotify(ctx);
@@ -345,6 +388,7 @@ export function createVisualController(
       );
     },
     cleanup(ctx) {
+      resetMemory();
       closeOverlay();
       fullscreenContribution.dispose();
       clearVisuals(ctx);

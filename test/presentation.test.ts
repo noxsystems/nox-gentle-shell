@@ -734,6 +734,34 @@ test("grouped pairs stack when the actual content budget is too narrow", () => {
   }
 });
 
+test("memory partition rows retain neutral styling and geometry", () => {
+  for (const value of [undefined, 0, 1048576, -1, NaN, Infinity]) {
+    for (const theme of [undefined, createMockTheme()]) {
+      for (const maxWidth of [0, 1, 2, 8, 12, 20, 24, 32, 40, 47, 80]) {
+        const rows = renderDetailedTelemetry({
+          telemetry: groupedTelemetry,
+          activeTools: {},
+          maxWidth,
+          theme,
+          processMemory: { lspBytes: value, treeBytes: value },
+        });
+        rows.forEach((row) => {
+          assertWidth(row, maxWidth);
+          assert.equal(visibleWidth(row), maxWidth);
+        });
+        if (maxWidth === 80) {
+          const plain = rows.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+          const valid =
+            value !== undefined && Number.isFinite(value) && value >= 0;
+          const expected = valid ? `${value! / 1048576} MiB` : "—";
+          assert.ok(plain.includes(`LSP RAM: ${expected}`));
+          assert.ok(plain.includes(`Tree RAM ≈: ${expected}`));
+        }
+      }
+    }
+  }
+});
+
 test("RSS is neutral and unavailable values never invent memory", () => {
   for (const rssBytes of [undefined, -1, NaN, Infinity, 0, 1048576, 1572864]) {
     const roles: Array<[string, string]> = [];
