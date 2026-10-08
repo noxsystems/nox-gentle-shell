@@ -21,7 +21,15 @@
     "toolSuccessBg": "#1B1720",
     "toolErrorBg": "#28101A",
     "paleBlue": "#A9C7EE",
-    "toolOutput": "#9B91B3"
+    "toolOutput": "#9B91B3",
+    "bannerRose": "#C9CED8",
+    "bannerLabel": "#59CFFF",
+    "bannerValue": "#B392F5",
+    "bannerLogoTip": "#59CFFF",
+    "bannerLogoFresh": "#59CFFF",
+    "bannerLogoInk": "#3D8BFF",
+    "bannerLogoDim": "#193969",
+    "bannerLogoGlint": "#DCEBFF"
   },
   "colors": {
     "accent": "accent",
