@@ -88,8 +88,8 @@ test("Theme satisfies the documented Pi 0.85.1 token contract", () => {
   assert.deepStrictEqual(
     themeJson.vars,
     {
-      base: "#080A12",
-      element: "#111420",
+      base: "#08060B",
+      element: "#1B1720",
       selection: "#152A46",
       border: "#35465F",
       borderMuted: "#202B3C",
@@ -104,7 +104,7 @@ test("Theme satisfies the documented Pi 0.85.1 token contract", () => {
       mint: "#A8DCC0",
       amber: "#E8B65F",
       error: "#FF334D",
-      toolSuccessBg: "#14201C",
+      toolSuccessBg: "#1B1720",
       toolErrorBg: "#28101A",
       paleBlue: "#A9C7EE",
       toolOutput: "#9B91B3",
