@@ -279,21 +279,21 @@ export function renderDetailedTelemetry({
 
   return renderTelemetryCard(
     [
-      telemetryRole(theme, "muted", "TOKENS"),
+      telemetryRole(theme, "accent", "TOKENS"),
       ...pairedMetrics(
         telemetryMetric(theme, "Input:", formatCompactNumber(usage.input)),
         telemetryMetric(theme, "Output:", formatCompactNumber(usage.output)),
         maxWidth - 4,
       ),
       "",
-      telemetryRole(theme, "muted", "CACHE"),
+      telemetryRole(theme, "accent", "CACHE"),
       ...pairedMetrics(
         telemetryMetric(theme, "Read:", formatCompactNumber(usage.cacheRead)),
         telemetryMetric(theme, "Write:", formatCompactNumber(usage.cacheWrite)),
         maxWidth - 4,
       ),
       "",
-      telemetryRole(theme, "muted", "SESSION"),
+      telemetryRole(theme, "accent", "SESSION"),
       telemetryMetric(
         theme,
         "Pi RAM:",
