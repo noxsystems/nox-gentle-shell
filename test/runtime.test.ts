@@ -56,7 +56,7 @@ test("RSS samples existing refreshes, never render callbacks, and discards faile
   assert.equal(samples, 10);
 });
 
-test("visibility toggle restores visible modes from commands and cycling and resets on cleanup", (t) => {
+test("visibility toggle switches between detailed and off, including compact alias and cleanup", (t) => {
   const { ctx } = createContext();
   const controller = createVisualController(
     undefined,
@@ -64,31 +64,20 @@ test("visibility toggle restores visible modes from commands and cycling and res
   );
   t.after(() => controller.cleanup(ctx as never));
   const toggle = () => controller.toggleVisibility(ctx as never);
-  toggle();
-  assert.equal(controller.state.mode, "off");
-  toggle();
-  assert.equal(controller.state.mode, "compact");
-  controller.runCommand("detailed", ctx as never);
+  assert.equal(controller.state.mode, "detailed");
   toggle();
   assert.equal(controller.state.mode, "off");
   toggle();
   assert.equal(controller.state.mode, "detailed");
   controller.runCommand("compact", ctx as never);
-  controller.cycleMode(ctx as never);
+  assert.equal(controller.state.mode, "detailed");
   controller.cycleMode(ctx as never);
   assert.equal(controller.state.mode, "off");
-  toggle();
-  assert.equal(controller.state.mode, "detailed");
-  controller.runCommand("off", ctx as never);
   controller.cycleMode(ctx as never);
-  toggle();
-  toggle();
-  assert.equal(controller.state.mode, "compact");
-  controller.setMode("detailed", ctx as never);
-  controller.cleanup(ctx as never);
+  assert.equal(controller.state.mode, "detailed");
   controller.setMode("off", ctx as never);
-  toggle();
-  assert.equal(controller.state.mode, "compact");
+  controller.cleanup(ctx as never);
+  assert.equal(controller.state.mode, "detailed");
   controller.cleanup(ctx as never);
 });
 
@@ -162,23 +151,24 @@ function createContext(mode: "tui" | "rpc" | "json" | "print" = "tui") {
   };
 }
 
-test("controller starts compact TUI UI with namespaced telemetry only", () => {
+test("controller starts detailed TUI UI with namespaced telemetry only", () => {
   const { ctx, calls } = createContext();
   const controller = createVisualController();
 
   controller.start(ctx as never);
 
+  assert.equal(controller.state.mode, "detailed");
   assert.deepEqual(
     calls.find((call) => call[0] === "status"),
-    [
-      "status",
-      NOX_GENTLE_SHELL_STATUS_KEY,
-      "◉ 42% · ↑ 0 · ↓ 0 · ◇ 0 · $ 0.00 · ⚙ 0",
-    ],
+    ["status", NOX_GENTLE_SHELL_STATUS_KEY, undefined],
   );
-  assert.deepEqual(
-    calls.find((call) => call[0] === "widget"),
-    ["widget", NOX_GENTLE_SHELL_WIDGET_KEY, undefined],
+  assert.ok(
+    calls.some(
+      (call) =>
+        call[0] === "widget" &&
+        call[1] === NOX_GENTLE_SHELL_WIDGET_KEY &&
+        call[2] !== undefined,
+    ),
   );
   assert.ok(calls.every(([surface]) => !SINGLETON_UI_SURFACES.has(surface)));
 });
@@ -202,13 +192,17 @@ test("commands and shortcuts cycle modes and reject invalid input without changi
   const controller = createVisualController();
   controller.start(ctx as never);
 
+  controller.runCommand("off", ctx as never);
+  assert.equal(controller.state.mode, "off");
   controller.runCommand("detailed", ctx as never);
   assert.equal(controller.state.mode, "detailed");
   controller.runCommand("off", ctx as never);
-  assert.equal(controller.state.mode, "off");
   controller.runCommand("compact", ctx as never);
-  assert.equal(controller.state.mode, "compact");
+  assert.equal(controller.state.mode, "detailed");
+  assert.deepEqual(calls.at(-1), ["notify", "ℹ Nox visual mode: detailed", "info"]);
 
+  controller.cycleMode(ctx as never);
+  assert.equal(controller.state.mode, "off");
   controller.cycleMode(ctx as never);
   assert.equal(controller.state.mode, "detailed");
   assert.deepEqual(
@@ -218,20 +212,16 @@ test("commands and shortcuts cycle modes and reject invalid input without changi
       ?.slice(0, 2),
     ["widget", NOX_GENTLE_SHELL_WIDGET_KEY],
   );
-  controller.cycleMode(ctx as never);
-  assert.equal(controller.state.mode, "off");
-  controller.cycleMode(ctx as never);
-  assert.equal(controller.state.mode, "compact");
 
   controller.runCommand("status", ctx as never);
-  assert.match(String(calls.at(-1)?.[1]), /Nox mode: compact/);
+  assert.match(String(calls.at(-1)?.[1]), /Nox mode: detailed/);
 
   const previous = { ...controller.state };
   controller.runCommand("unknown", ctx as never);
   assert.deepEqual(controller.state, previous);
   assert.deepEqual(calls.at(-1), [
     "notify",
-    "⚠ Usage: /nox-gentle-shell [compact|detailed|off|status]",
+    "⚠ Usage: /nox-gentle-shell [detailed|off|status] (compact is an alias for detailed)",
     "warning",
   ]);
 });
@@ -319,8 +309,8 @@ test("context warning state resets on cleanup and for a new session", () => {
   assert.equal(contextWarnings(fresh.calls).length, 1);
 });
 
-test("context warning protects compact, detailed, and off modes while UI exists", () => {
-  for (const mode of ["compact", "detailed", "off"] as const) {
+test("context warning protects detailed and off modes while UI exists", () => {
+  for (const mode of ["detailed", "off"] as const) {
     const { ctx, calls, setContextUsage } = createContext();
     setContextUsage(contextUsage(79));
     const controller = createVisualController();
@@ -357,10 +347,7 @@ test("refreshes finalized telemetry and reduces interleaved concurrent tool life
     },
   ]);
   controller.refresh(ctx as never);
-  assert.match(
-    String(calls.filter((call) => call[0] === "status").at(-1)?.[2]),
-    /↑ 12/,
-  );
+  assert.equal(controller.state.telemetry?.usage.input, 12);
 
   controller.updateTools(
     { type: "start", toolCallId: "one", toolName: "read" },
@@ -378,10 +365,7 @@ test("refreshes finalized telemetry and reduces interleaved concurrent tool life
     { type: "end", toolCallId: "two", toolName: "bash" },
     ctx as never,
   );
-  assert.match(
-    String(calls.filter((call) => call[0] === "status").at(-1)?.[2]),
-    /⚙ 1/,
-  );
+  assert.deepEqual(Object.keys(controller.state.activeTools), ["one"]);
   controller.updateTools(
     { type: "end", toolCallId: "one", toolName: "read" },
     ctx as never,
@@ -639,7 +623,7 @@ test("print and JSON modes never issue visual calls, even after commands", () =>
   }
 });
 
-test("session replacement clears detailed telemetry before a fresh compact session starts", () => {
+test("session replacement clears detailed telemetry before a fresh detailed session starts", () => {
   const oldSession = createContext();
   oldSession.ctx.model = { provider: "old", id: "old-model" };
   const oldController = createVisualController();
@@ -652,7 +636,7 @@ test("session replacement clears detailed telemetry before a fresh compact sessi
   oldController.cleanup(oldSession.ctx as never);
 
   assert.deepEqual(oldController.state, {
-    mode: "compact",
+    mode: "detailed",
     activeTools: {},
     telemetry: undefined,
     model: undefined,
@@ -663,13 +647,9 @@ test("session replacement clears detailed telemetry before a fresh compact sessi
   const freshController = createVisualController();
   freshController.start(freshSession.ctx as never);
 
-  assert.equal(freshController.state.mode, "compact");
+  assert.equal(freshController.state.mode, "detailed");
   assert.equal(freshController.state.model, "fresh/fresh-model");
   assert.deepEqual(freshController.state.activeTools, {});
-  assert.equal(
-    freshSession.calls.filter((call) => call[0] === "widget").at(-1)?.[2],
-    undefined,
-  );
 });
 
 test("cleanup is idempotent and clears only namespaced UI surfaces", () => {
@@ -678,7 +658,7 @@ test("cleanup is idempotent and clears only namespaced UI surfaces", () => {
   controller.start(ctx as never);
   controller.cleanup(ctx as never);
   controller.cleanup(ctx as never);
-  assert.equal(controller.state.mode, "compact");
+  assert.equal(controller.state.mode, "detailed");
   assert.ok(
     calls.filter((call) => call[0] === "status" && call[2] === undefined)
       .length >= 2,
@@ -699,7 +679,7 @@ test("bare command reports current state and concise usage through one info noti
   assert.deepEqual(calls, [
     [
       "notify",
-      "ℹ Nox mode: compact; telemetry: available; active tools: 0. Usage: /nox-gentle-shell [compact|detailed|off|status]",
+      "ℹ Nox mode: detailed; telemetry: available; active tools: 0. Usage: /nox-gentle-shell [detailed|off|status] (compact is an alias for detailed)",
       "info",
     ],
   ]);
@@ -716,7 +696,7 @@ test("explicit status remains useful through one info notification", () => {
   assert.deepEqual(calls, [
     [
       "notify",
-      "ℹ Nox mode: compact; telemetry: available; active tools: 0",
+      "ℹ Nox mode: detailed; telemetry: available; active tools: 0",
       "info",
     ],
   ]);
@@ -745,7 +725,7 @@ test("missing and extra command arguments notify without changing visual state",
     assert.deepEqual(calls, [
       [
         "notify",
-        "⚠ Usage: /nox-gentle-shell [compact|detailed|off|status]",
+        "⚠ Usage: /nox-gentle-shell [detailed|off|status] (compact is an alias for detailed)",
         "warning",
       ],
     ]);
@@ -775,7 +755,7 @@ test("off clears every owned surface and cleanup drops stale telemetry and activ
     ["widget", NOX_GENTLE_SHELL_WIDGET_KEY, undefined],
   ]);
   assert.deepEqual(controller.state, {
-    mode: "compact",
+    mode: "detailed",
     activeTools: {},
     telemetry: undefined,
     model: undefined,
@@ -807,6 +787,7 @@ test("async memory coalesces, caches without redraw and ignores old lifetime com
       .render(80)
       .join("\n");
   };
+  controller.setMode("off", ctx as never);
   controller.start(ctx as never);
   assert.equal(samples, 0);
   controller.setMode("detailed", ctx as never);

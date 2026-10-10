@@ -155,7 +155,7 @@ test("connect notices allowlist typed diagnostics and never reveal arbitrary err
   }
 });
 
-test("Spotify refresh in compact mode explains visibility and disconnect failure warns", async () => {
+test("Spotify refresh while Nox is off explains visibility and disconnect failure warns", async () => {
   let refreshed = 0;
   const spotify = createSpotifyController({
     clientId: "client",
@@ -182,6 +182,7 @@ test("Spotify refresh in compact mode explains visibility and disconnect failure
   const { commands } = createExtensionRegistration(controller);
   const command = commands.find((entry) => entry.name === "nox-spotify")!;
   const { ctx, calls } = createContext();
+  controller.setMode("off", ctx as never);
   await command.options.handler("refresh", ctx as never);
   assert.equal(refreshed, 0);
   assert.match(String(calls.at(-1)?.[1]), /detailed.*overlay/i);
@@ -238,7 +239,7 @@ test("mode transitions and shutdown close only their active overlay", async () =
   const duplicate = open.options.handler("open", ctx as never);
   await duplicate;
   assert.equal(created, 1);
-  await nox.options.handler("compact", ctx as never);
+  await nox.options.handler("off", ctx as never);
   await first;
   assert.equal(closes, 1);
   component?.handleInput("n");
@@ -286,6 +287,8 @@ test("Spotify open command and shortcut share guards, cleanup and never control 
     const shortcut = shortcuts.find((entry) => entry.key === "ctrl+alt+p");
     assert.ok(shortcut, "register Spotify open shortcut");
     const { ctx, calls } = createContext();
+    controller.start(ctx as never);
+    const visibleBefore = spotify.active;
     let opened = 0;
     (ctx.ui as object as { custom: Function }).custom = async () => {
       opened++;
@@ -302,7 +305,11 @@ test("Spotify open command and shortcut share guards, cleanup and never control 
       assert.deepEqual(calls, []);
       if (configured) {
         await assert.rejects(open(ctx), /overlay failed/);
-        assert.equal(spotify.active, false, "restore visibility after failure");
+        assert.equal(
+          spotify.active,
+          visibleBefore,
+          "restore visibility after failure",
+        );
       } else {
         await open(ctx);
         assert.match(String(calls.at(-1)?.[1]), /SPOTIFY_CLIENT_ID/);
@@ -323,9 +330,9 @@ test("Nox visibility shortcut invokes the controller toggle and preserves legacy
   toggle.options.handler(ctx);
   assert.equal(controller.state.mode, "off");
   toggle.options.handler(ctx);
-  shortcuts.find((entry) => entry.key === "ctrl+alt+t")!.options.handler(ctx);
   assert.equal(controller.state.mode, "detailed");
-  toggle.options.handler(ctx);
+  shortcuts.find((entry) => entry.key === "ctrl+alt+t")!.options.handler(ctx);
+  assert.equal(controller.state.mode, "off");
   toggle.options.handler(ctx);
   assert.equal(controller.state.mode, "detailed");
   controller.cleanup(ctx as never);
