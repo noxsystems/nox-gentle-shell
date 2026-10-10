@@ -428,6 +428,12 @@ test("detailed telemetry uses active semantic roles with a titled padded frame",
   assert.ok(
     roles.some(({ role, text }) => role === "muted" && text === "Input:"),
   );
+  for (const group of ["TOKENS", "CACHE", "SESSION"]) {
+    assert.ok(
+      roles.some(({ role, text }) => role === "accent" && text === group),
+      `${group} group label uses accent`,
+    );
+  }
   assert.ok(
     roles.some(({ role, text }) => role === "text" && text === "18.2k"),
   );
