@@ -193,7 +193,7 @@ export default function (
     handler: openSpotify,
   });
   pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.toggleVisibility.key, {
-    description: "Hide/show Nox card, restoring the last visible mode",
+    description: "Hide/show the Nox card",
     handler: (ctx) => controller.toggleVisibility(ctx),
   });
 }

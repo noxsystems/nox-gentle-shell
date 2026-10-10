@@ -8,10 +8,7 @@ import {
   createFullscreenContributionClient,
   type FullscreenContributionEvents,
 } from "./fullscreen-contribution.js";
-import {
-  renderCompactTelemetry,
-  renderDetailedTelemetry,
-} from "./presentation.js";
+import { renderDetailedTelemetry } from "./presentation.js";
 import {
   createSpotifyController,
   type SpotifyController,
@@ -29,7 +26,7 @@ import {
   type ProcessMemorySnapshot,
 } from "./process-memory.js";
 
-export type VisualMode = "compact" | "detailed" | "off";
+export type VisualMode = "detailed" | "off";
 
 export interface VisualRuntimeState {
   mode: VisualMode;
@@ -44,10 +41,11 @@ const CONTEXT_WARNING_THRESHOLD = 80;
 const CONTEXT_REARM_THRESHOLD = 75;
 const CONTEXT_WARNING =
   "Context usage reached {percent}%. Start a new session soon to avoid automatic compaction.";
+const USAGE =
+  "Usage: /nox-gentle-shell [detailed|off|status] (compact is an alias for detailed)";
 const NEXT_MODE: Readonly<Record<VisualMode, VisualMode>> = {
-  compact: "detailed",
   detailed: "off",
-  off: "compact",
+  off: "detailed",
 };
 
 function modelIdentity(ctx: ExtensionContext): string | undefined {
@@ -73,7 +71,7 @@ function isValidContextPercent(
 
 function emptyState(): VisualRuntimeState {
   return {
-    mode: "compact",
+    mode: "detailed",
     activeTools: {},
     telemetry: undefined,
     model: undefined,
@@ -106,7 +104,6 @@ export function createVisualController(
   sampleMemory: () => Promise<ProcessMemorySnapshot> = sampleProcessMemory,
 ): VisualController {
   let state = emptyState();
-  let lastVisibleMode: Exclude<VisualMode, "off"> = "compact";
   let rssBytes: number | undefined;
   let processMemory: ProcessMemorySnapshot = {};
   let memoryGeneration = 0;
@@ -228,21 +225,10 @@ export function createVisualController(
     }
 
     const telemetry = state.telemetry;
-    if (state.mode === "detailed") {
-      ctx.ui.setStatus(NOX_GENTLE_SHELL_STATUS_KEY, undefined);
-    } else if (telemetry) {
-      ctx.ui.setStatus(
-        NOX_GENTLE_SHELL_STATUS_KEY,
-        renderCompactTelemetry({
-          telemetry,
-          activeTools: state.activeTools,
-          maxWidth: RENDER_WIDTH,
-        }),
-      );
-    }
+    ctx.ui.setStatus(NOX_GENTLE_SHELL_STATUS_KEY, undefined);
     if (!telemetry) return;
 
-    if (state.mode === "detailed") {
+    {
       const renderDetail = (width?: number) =>
         renderDetailedTelemetry({
           telemetry,
@@ -287,8 +273,6 @@ export function createVisualController(
           renderDetail(RPC_WIDGET_WIDTH),
         );
       }
-    } else {
-      ctx.ui.setWidget(NOX_GENTLE_SHELL_WIDGET_KEY, undefined);
     }
   };
 
@@ -337,12 +321,11 @@ export function createVisualController(
     },
     setMode(mode, ctx) {
       if (mode !== state.mode && mode !== "detailed") closeOverlay();
-      if (mode !== "off") lastVisibleMode = mode;
       state = { ...state, mode };
       this.refresh(ctx);
     },
     toggleVisibility(ctx) {
-      this.setMode(state.mode === "off" ? lastVisibleMode : "off", ctx);
+      this.setMode(state.mode === "off" ? "detailed" : "off", ctx);
       notify(ctx, `ℹ Nox visual mode: ${state.mode}`);
     },
     cycleMode(ctx) {
@@ -358,7 +341,7 @@ export function createVisualController(
         const telemetry = state.telemetry ? "available" : "unavailable";
         notify(
           ctx,
-          `ℹ Nox mode: ${state.mode}; telemetry: ${telemetry}; active tools: ${Object.keys(state.activeTools).length}. Usage: /nox-gentle-shell [compact|detailed|off|status]`,
+          `ℹ Nox mode: ${state.mode}; telemetry: ${telemetry}; active tools: ${Object.keys(state.activeTools).length}. ${USAGE}`,
         );
         return;
       }
@@ -367,8 +350,9 @@ export function createVisualController(
         parts.length === 1 &&
         (command === "compact" || command === "detailed" || command === "off")
       ) {
-        this.setMode(command, ctx);
-        notify(ctx, `ℹ Nox visual mode: ${command}`);
+        const mode = command === "off" ? "off" : "detailed";
+        this.setMode(mode, ctx);
+        notify(ctx, `ℹ Nox visual mode: ${mode}`);
         return;
       }
 
@@ -383,7 +367,7 @@ export function createVisualController(
 
       notify(
         ctx,
-        "⚠ Usage: /nox-gentle-shell [compact|detailed|off|status]",
+        `⚠ ${USAGE}`,
         "warning",
       );
     },
@@ -396,7 +380,6 @@ export function createVisualController(
       spotifyController.dispose();
       lastContext = undefined;
       state = emptyState();
-      lastVisibleMode = "compact";
       rssBytes = undefined;
       contextWarningArmed = true;
     },

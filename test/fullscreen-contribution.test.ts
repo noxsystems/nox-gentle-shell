@@ -79,7 +79,6 @@ test("detailed TUI requests the exact namespaced v1 rail declaration with a widg
   const { ctx, calls } = createContext();
 
   controller.start(ctx as never);
-  controller.setMode("detailed", ctx as never);
 
   assert.equal(events.length, 1);
   const [{ event, request }] = events;
@@ -121,7 +120,6 @@ test("an accepted rail uses its supplied width and older hosts retain the fallba
   const { ctx } = createContext();
 
   controller.start(ctx as never);
-  controller.setMode("detailed", ctx as never);
 
   assert.ok(request);
   const hostWidthLines = request.declaration.render(47);
@@ -154,7 +152,6 @@ test("an accepted lease suppresses the duplicate TUI widget and updates without 
   const { ctx, calls } = createContext();
 
   controller.start(ctx as never);
-  controller.setMode("detailed", ctx as never);
   controller.refresh(ctx as never);
   controller.updateTools(
     { type: "start", toolCallId: "tool", toolName: "bash" },
@@ -186,12 +183,11 @@ test("rejection, absent response, malformed acceptance, and thrown emits preserv
     });
     const { ctx, calls } = createContext();
     controller.start(ctx as never);
-    controller.setMode("detailed", ctx as never);
     assert.equal(typeof detailedWidget(calls), "function");
   }
 });
 
-test("detailed transitions and shutdown dispose leases while keeping compact and off behavior", () => {
+test("leaving detailed and shutdown dispose leases while keeping off behavior", () => {
   const first = createLease();
   const controller = createVisualController({
     emit(_event, request) {
@@ -203,18 +199,10 @@ test("detailed transitions and shutdown dispose leases while keeping compact and
   });
   const { ctx, calls } = createContext();
   controller.start(ctx as never);
-  controller.setMode("detailed", ctx as never);
   calls.length = 0;
 
-  controller.setMode("compact", ctx as never);
-  assert.deepEqual(first.calls, ["dispose"]);
-  assert.ok(
-    calls.some((call) => call[0] === "status" && call[2] !== undefined),
-  );
-  assert.deepEqual(detailedWidget(calls), undefined);
-
-  calls.length = 0;
   controller.setMode("off", ctx as never);
+  assert.deepEqual(first.calls, ["dispose"]);
   assert.ok(
     calls.some((call) => call[0] === "status" && call[2] === undefined),
   );
@@ -240,12 +228,10 @@ test("a restarted session requests a fresh lease instead of reusing a disposed o
   });
   const oldSession = createContext();
   controller.start(oldSession.ctx as never);
-  controller.setMode("detailed", oldSession.ctx as never);
   controller.cleanup(oldSession.ctx as never);
 
   const newSession = createContext();
   controller.start(newSession.ctx as never);
-  controller.setMode("detailed", newSession.ctx as never);
 
   assert.equal(emits, 2);
   assert.deepEqual(first.calls, ["dispose"]);
@@ -258,7 +244,6 @@ test("RPC keeps string-array widgets while print and JSON emit no contribution o
     const controller = createVisualController({ emit: () => (emits += 1) });
     const { ctx, calls } = createContext(mode);
     controller.start(ctx as never);
-    controller.setMode("detailed", ctx as never);
 
     if (mode === "rpc") {
       assert.ok(Array.isArray(detailedWidget(calls)));
@@ -315,7 +300,6 @@ test("a lease update failure releases the host contribution and restores the loc
   const { ctx, calls } = createContext();
 
   controller.start(ctx as never);
-  controller.setMode("detailed", ctx as never);
   controller.refresh(ctx as never);
 
   assert.equal(typeof detailedWidget(calls), "function");

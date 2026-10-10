@@ -176,46 +176,10 @@ function formatDecimal(value: number): string {
   return value.toFixed(1).replace(/\.0$/, "");
 }
 
-function formatMoney(value: number): string {
-  return `$${value.toFixed(2)}`;
-}
-
 function activeToolNames(activeTools: ActiveTools): string[] {
   return Object.values(activeTools)
     .map((tool) => tool.toolName)
     .sort();
-}
-
-/**
- * Render finalized totals as a compact status line. Segments are omitted from
- * right to left as space narrows; they never represent live streaming usage.
- */
-export function renderCompactTelemetry({
-  telemetry,
-  activeTools,
-  maxWidth,
-  symbols = DEFAULT_TELEMETRY_SYMBOLS,
-}: TelemetryRenderOptions): string {
-  if (maxWidth <= 0) return "";
-
-  const { context, usage } = telemetry;
-  const segments = [
-    `${symbols.context} ${context.percent === null ? "—" : `${formatDecimal(context.percent)}%`}`,
-    `${symbols.input} ${formatCompactNumber(usage.input)}`,
-    `${symbols.output} ${formatCompactNumber(usage.output)}`,
-    `${symbols.cache} ${formatCompactNumber(usage.cacheRead + usage.cacheWrite)}`,
-    `${symbols.cost} ${formatMoney(usage.cost).slice(1)}`,
-    `${symbols.tools} ${Object.keys(activeTools).length}`,
-  ];
-
-  while (segments.length > 1 && visibleWidth(segments.join(" · ")) > maxWidth) {
-    segments.pop();
-  }
-
-  const output = segments.join(" · ");
-  return visibleWidth(output) <= maxWidth
-    ? output
-    : truncateToWidth(output, maxWidth, "…");
 }
 
 function truncatePlainToWidth(value: string, width: number): string {
