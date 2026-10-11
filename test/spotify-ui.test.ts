@@ -4,6 +4,7 @@ import {
   createSpotifyController,
   renderSpotifyOverlay,
   spotifyProgress,
+  spotifyGauge,
   spotifyLabel,
   spotifyOverlayComponent,
 } from "../extensions/spotify-ui.js";
@@ -347,6 +348,109 @@ test("disposing during delayed exchange prevents token persistence", async () =>
   assert.equal(clears, 0);
 });
 
+test("progress gauge fills eight cells like the context gauge", () => {
+  assert.equal(spotifyGauge({ playback, updatedAt: 1000 }, 1000), "▰▱▱▱▱▱▱▱");
+  assert.equal(spotifyGauge({ playback, updatedAt: 1000 }, 5000), "▰▰▰▰▱▱▱▱");
+  assert.equal(spotifyGauge({ playback, updatedAt: 1000 }, 99000), "▰▰▰▰▰▰▰▰");
+  assert.equal(
+    spotifyGauge(
+      { playback: { ...playback, progress_ms: 0 }, updatedAt: 0 },
+      0,
+    ),
+    "▱▱▱▱▱▱▱▱",
+  );
+  assert.equal(spotifyGauge({ playback: null, updatedAt: 0 }, 0), undefined);
+});
+
+function fakeClock() {
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  let next = 1;
+  return {
+    timers,
+    schedule: (callback: () => void, delay: number) => {
+      const id = next++;
+      timers.set(id, { callback, delay });
+      return { unref() {}, id } as unknown as ReturnType<typeof setTimeout>;
+    },
+    cancel: (timer: ReturnType<typeof setTimeout>) => {
+      timers.delete((timer as unknown as { id: number }).id);
+    },
+    fire(delay: number) {
+      for (const [id, timer] of [...timers]) {
+        if (timer.delay !== delay) continue;
+        timers.delete(id);
+        timer.callback();
+      }
+    },
+    pending(delay: number) {
+      return [...timers.values()].filter((t) => t.delay === delay).length;
+    },
+  };
+}
+
+function tickingController(state: typeof playback) {
+  const clock = fakeClock();
+  let reads = 0;
+  let changes = 0;
+  const controller = createSpotifyController({
+    auth: {
+      connect: async () => ({ persistenceAvailable: false }),
+      disconnect: async () => {},
+      cancelPending: () => {},
+      getAccessToken: async () => null,
+      persistenceAvailable: false,
+    },
+    api: {
+      getPlayback: async () => {
+        reads++;
+        return state;
+      },
+      play: async () => {},
+      pause: async () => {},
+      next: async () => {},
+      previous: async () => {},
+    },
+    onChange: () => changes++,
+    clientId: "client",
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+  });
+  return { controller, clock, reads: () => reads, changes: () => changes };
+}
+
+test("playing track re-renders every second without extra API reads", async () => {
+  const t = tickingController(playback);
+  t.controller.setVisible(true);
+  await tick();
+  assert.equal(t.reads(), 1);
+  const afterFetch = t.changes();
+  assert.equal(t.clock.pending(1000), 1);
+  t.clock.fire(1000);
+  t.clock.fire(1000);
+  assert.equal(t.changes(), afterFetch + 2);
+  assert.equal(t.reads(), 1);
+  assert.equal(t.clock.pending(1000), 1);
+  t.controller.setVisible(false);
+  assert.equal(t.clock.pending(1000), 0);
+  t.controller.dispose();
+});
+
+test("paused track does not tick", async () => {
+  const t = tickingController({ ...playback, is_playing: false });
+  t.controller.setVisible(true);
+  await tick();
+  assert.equal(t.clock.pending(1000), 0);
+  t.controller.dispose();
+});
+
+test("disposing stops the progress tick", async () => {
+  const t = tickingController(playback);
+  t.controller.setVisible(true);
+  await tick();
+  t.controller.dispose();
+  assert.equal(t.clock.pending(1000), 0);
+});
+
 test("progress advances only while playing and clamps to duration", () => {
   const snapshot = { playback, updatedAt: 1000 };
   assert.equal(spotifyProgress(snapshot, 6000), 6000);
@@ -376,6 +480,18 @@ test("missing configuration cannot trigger API or render a Spotify row", () => {
   } finally {
     if (original !== undefined) process.env.SPOTIFY_CLIENT_ID = original;
   }
+});
+
+test("overlay shows the progress gauge with elapsed and total time", () => {
+  const theme = {
+    fg: (_role: string, text: string) => `\x1b[34m${text}\x1b[0m`,
+    bold: (text: string) => text,
+  } as never;
+  const lines = renderSpotifyOverlay(playback, 60, theme, 5000, {
+    playback,
+    updatedAt: 1000,
+  }).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(lines.some((line: string) => line.includes("▰▰▰▰▱▱▱▱ 0:05/0:10")));
 });
 
 test("overlay frames playing, paused and unavailable states at narrow widths", () => {

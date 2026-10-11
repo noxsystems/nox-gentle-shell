@@ -19,6 +19,11 @@ export interface SpotifySnapshot {
   error?: string;
 }
 const INTERVAL_MS = 20_000;
+/** Re-render cadence while a track plays; progress is interpolated, so this reads no API. */
+const TICK_MS = 1000;
+const GAUGE_CELLS = 8;
+const GAUGE_FILLED = "▰";
+const GAUGE_EMPTY = "▱";
 function duration(ms: number): string {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -37,6 +42,45 @@ export function spotifyProgress(
         (playback.is_playing ? Math.max(0, now - snapshot.updatedAt) : 0),
     ),
   );
+}
+/** Track progress in the context gauge's style: eight cells of ▰ filled and ▱ empty. */
+export function spotifyGauge(
+  snapshot: SpotifySnapshot | undefined,
+  now = Date.now(),
+): string | undefined {
+  const total = snapshot?.playback?.item?.duration_ms;
+  if (!snapshot || !total) return undefined;
+  const filled = Math.min(
+    GAUGE_CELLS,
+    Math.max(
+      0,
+      Math.round((spotifyProgress(snapshot, now) / total) * GAUGE_CELLS),
+    ),
+  );
+  return GAUGE_FILLED.repeat(filled) + GAUGE_EMPTY.repeat(GAUGE_CELLS - filled);
+}
+/** The gauge painted like `ctx`: filled cells in the accent role, empty ones in the border role. */
+export function paintSpotifyGauge(
+  gauge: string,
+  paint: (role: "accent" | "border", text: string) => string,
+): string {
+  const cut = gauge.indexOf(GAUGE_EMPTY);
+  const filled = cut < 0 ? gauge : gauge.slice(0, cut);
+  const empty = cut < 0 ? "" : gauge.slice(cut);
+  return (
+    (filled ? paint("accent", filled) : "") +
+    (empty ? paint("border", empty) : "")
+  );
+}
+/** Elapsed and total time, "1:23/3:45". */
+export function spotifyTimes(
+  snapshot: SpotifySnapshot,
+  now = Date.now(),
+): string | undefined {
+  const item = snapshot.playback?.item;
+  return item
+    ? `${duration(spotifyProgress(snapshot, now))}/${duration(item.duration_ms)}`
+    : undefined;
 }
 export function spotifyLabel(
   snapshot: SpotifySnapshot | undefined,
@@ -58,15 +102,20 @@ export function renderSpotifyOverlay(
   now: number,
   snapshot?: SpotifySnapshot,
 ): string[] {
+  const state: SpotifySnapshot =
+    snapshot ??
+    (playback
+      ? { playback, updatedAt: now }
+      : { playback: null, updatedAt: now });
+  const gauge = state.error ? undefined : spotifyGauge(state, now);
   const lines = [
     theme.fg("accent", "Spotify · Active Connect device"),
-    spotifyLabel(
-      snapshot ??
-        (playback
-          ? { playback, updatedAt: now }
-          : { playback: null, updatedAt: now }),
-      now,
-    ) ?? "Spotify",
+    spotifyLabel(state, now) ?? "Spotify",
+    ...(gauge
+      ? [
+          `${paintSpotifyGauge(gauge, (role, text) => theme.fg(role, text))} ${spotifyTimes(state, now)}`,
+        ]
+      : []),
     "Space play/pause · N next · P previous · Esc close",
     playback?.item?.external_urls?.spotify ?? "No Spotify track URL available",
   ];
@@ -79,9 +128,8 @@ export function renderSpotifyOverlay(
     ];
   const border = (text: string) => theme.fg("border", text);
   const contentWidth = Math.max(0, width - 4);
-  const body = lines.map((line, index) => {
-    const text =
-      index === 0 ? line : index === 2 ? theme.fg("muted", line) : line;
+  const body = lines.map((line) => {
+    const text = line.startsWith("Space ") ? theme.fg("muted", line) : line;
     const clipped = truncateToWidth(text, contentWidth, "…");
     return `${border("│ ")}${clipped}${" ".repeat(contentWidth - visibleWidth(clipped))}${border(" │")}`;
   });
@@ -123,9 +171,33 @@ export function createSpotifyController(
   let loading = false;
   let disconnected = false;
   let retryDelay = INTERVAL_MS;
+  let ticker: ReturnType<typeof setTimeout> | undefined;
+  const stopTicking = () => {
+    if (ticker) cancel(ticker);
+    ticker = undefined;
+  };
+  /** Keeps one pending re-render while a track plays, so the progress moves between reads. */
+  const keepTicking = () => {
+    if (
+      ticker ||
+      !visible ||
+      disposed ||
+      disconnected ||
+      !snapshot?.playback?.is_playing
+    )
+      return;
+    ticker = schedule(() => {
+      ticker = undefined;
+      if (!visible || disposed || disconnected) return;
+      options.onChange?.();
+      keepTicking();
+    }, TICK_MS);
+    ticker.unref?.();
+  };
   const clear = () => {
     if (timer) cancel(timer);
     timer = undefined;
+    stopTicking();
     abort?.abort();
     abort = undefined;
     generation++;
@@ -155,6 +227,8 @@ export function createSpotifyController(
       snapshot = { playback, updatedAt: now() };
       retryDelay = INTERVAL_MS;
       options.onChange?.();
+      if (playback?.is_playing) keepTicking();
+      else stopTicking();
     } catch (error) {
       if (version !== generation || !visible || disconnected || disposed)
         return;
@@ -171,6 +245,7 @@ export function createSpotifyController(
             ? error.message
             : "Playback unavailable",
       };
+      stopTicking();
       options.onChange?.();
     } finally {
       loading = false;

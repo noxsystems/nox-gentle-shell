@@ -545,6 +545,22 @@ test("Spotify card separates status and track while retaining telemetry without 
   assert.match(full, /Spotify · ⏸/);
   assert.match(full, /Long 🎵 song — Artist/);
   assert.match(full, /0:01\/0:10/);
+  assert.match(full, /▰▱▱▱▱▱▱▱ 0:01\/0:10/);
+  const playing = stripAnsi(
+    renderDetailedTelemetry({
+      telemetry,
+      activeTools: {},
+      maxWidth: 80,
+      spotify: {
+        ...spotify,
+        playback: { ...spotify.playback, is_playing: true },
+      },
+      now: 5000,
+      theme: createMockTheme(),
+    }).join("\n"),
+  );
+  assert.match(playing, /▰▰▰▰▱▱▱▱ 0:05\/0:10/);
+  assert.doesNotMatch(playing, /Artist · 0:05/);
   for (const state of [
     spotify,
     { ...spotify, playback: { ...spotify.playback, is_playing: true } },
