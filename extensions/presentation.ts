@@ -1,7 +1,13 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { ActiveTools, TelemetrySnapshot } from "./telemetry.js";
-import { spotifyLabel, type SpotifySnapshot } from "./spotify-ui.js";
+import {
+  paintSpotifyGauge,
+  spotifyGauge,
+  spotifyLabel,
+  spotifyTimes,
+  type SpotifySnapshot,
+} from "./spotify-ui.js";
 
 export interface HeaderOptions {
   title: string;
@@ -356,10 +362,27 @@ export function renderDetailedTelemetry({
               detail.startsWith("▶") || detail.startsWith("⏸")
                 ? detail.slice(0, 1)
                 : "";
+            const gauge =
+              spotify && !spotify.error
+                ? spotifyGauge(spotify, now)
+                : undefined;
+            const times = spotify ? spotifyTimes(spotify, now) : undefined;
+            const track = marker ? detail.slice(2) : detail;
             return [
               rule,
               `${telemetryRole(theme, "accent", "Spotify")} ${telemetryRole(theme, "muted", "·")} ${telemetryRole(theme, "text", marker || "—")}`,
-              telemetryRole(theme, "text", marker ? detail.slice(2) : detail),
+              telemetryRole(
+                theme,
+                "text",
+                gauge && times && track.endsWith(` · ${times}`)
+                  ? track.slice(0, -` · ${times}`.length)
+                  : track,
+              ),
+              ...(gauge && times
+                ? [
+                    `${paintSpotifyGauge(gauge, (role, text) => telemetryRole(theme, role, text))} ${telemetryRole(theme, "text", times)}`,
+                  ]
+                : []),
             ];
           })()
         : []),
