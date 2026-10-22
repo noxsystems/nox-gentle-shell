@@ -13,10 +13,13 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import {
   createYoutubePlayer,
+  detectWindowsMpv,
   isYoutubeUrl,
+  npipeTransport,
   PlaylistEdgeError,
   renderYoutubeOverlay,
   spawnMpv,
+  toWindowsPath,
   youtubeLabel,
   youtubeOverlayComponent,
   type YoutubeSnapshot,
@@ -726,4 +729,306 @@ test("killing mpv escalates to SIGKILL when SIGTERM is ignored", async (t) => {
   mpv.kill();
   await until(() => exit !== undefined);
   assert.equal(exit, "SIGKILL");
+});
+
+test("a custom transport carries the whole IPC session without a unix socket", async (t) => {
+  const written: Array<{ command: unknown[]; request_id: number }> = [];
+  let receive: ((chunk: string) => void) | undefined;
+  let closed = 0;
+  let cleaned = 0;
+  let exit: ((code: number | null) => void) | undefined;
+  const launches: string[][] = [];
+  const player = createYoutubePlayer({
+    transport: {
+      address: "\\\\.\\pipe\\nox-test",
+      async connect() {
+        return {
+          write(text: string) {
+            for (const line of text.split("\n").filter(Boolean)) {
+              const message = JSON.parse(line);
+              written.push(message);
+              receive?.(
+                `${JSON.stringify({ request_id: message.request_id, error: "success" })}\n`,
+              );
+            }
+          },
+          onData(callback: (chunk: string) => void) {
+            receive = callback;
+          },
+          onClose() {},
+          destroy() {
+            closed++;
+          },
+        };
+      },
+      cleanup() {
+        cleaned++;
+      },
+    },
+    launch: (args) => {
+      launches.push(args);
+      return { kill() {}, onExit: (callback) => void (exit = callback) };
+    },
+    now: () => 1_000,
+  });
+  t.after(() => player.dispose());
+
+  await player.play("https://youtu.be/abc");
+  assert.ok(launches[0]!.includes("--input-ipc-server=\\\\.\\pipe\\nox-test"));
+  assert.equal(player.socketPath, "\\\\.\\pipe\\nox-test");
+  await until(() => written.length >= 6);
+  assert.deepEqual(
+    written.slice(0, 6).map((message) => message.command[2]),
+    [
+      "media-title",
+      "pause",
+      "time-pos",
+      "duration",
+      "playlist-pos",
+      "playlist-count",
+    ],
+  );
+
+  receive!(
+    `${JSON.stringify({ event: "property-change", name: "media-title", data: "Song" })}\n`,
+  );
+  assert.equal(player.snapshot?.title, "Song");
+  await player.action("toggle");
+  assert.deepEqual(written.at(-1)!.command, ["cycle", "pause"]);
+
+  await player.stop();
+  assert.deepEqual(written.at(-1)!.command, ["quit"]);
+  assert.ok(closed >= 1);
+  assert.ok(cleaned >= 1);
+  assert.equal(player.running, false);
+  assert.equal(exit !== undefined, true);
+});
+
+/** An in-memory mpv IPC peer; `get_property pid` answers `pid`. */
+function memoryTransport(pid = 4242) {
+  const written: Array<{ command: unknown[]; request_id: number }> = [];
+  let receive: ((chunk: string) => void) | undefined;
+  return {
+    written,
+    transport: {
+      address: "\\\\.\\pipe\\nox-memory",
+      async connect() {
+        return {
+          write(text: string) {
+            for (const line of text.split("\n").filter(Boolean)) {
+              const message = JSON.parse(line);
+              written.push(message);
+              const data =
+                message.command[0] === "get_property" &&
+                message.command[1] === "pid"
+                  ? pid
+                  : null;
+              receive?.(
+                `${JSON.stringify({ request_id: message.request_id, error: "success", data })}\n`,
+              );
+            }
+          },
+          onData: (callback: (chunk: string) => void) =>
+            void (receive = callback),
+          onClose() {},
+          destroy() {},
+        };
+      },
+      cleanup() {},
+    },
+  };
+}
+
+const WINDOWS = {
+  mpvPath: "/mnt/c/Users/me/scoop/shims/mpv.exe",
+  relayPath: "/mnt/c/relay/npiperelay.exe",
+};
+
+test("detectWindowsMpv picks Windows mpv only on WSL with both executables", () => {
+  const found = new Set([WINDOWS.mpvPath, WINDOWS.relayPath]);
+  const find = (names: string[]) => names.find((name) => found.has(name));
+  const candidates = {
+    mpv: [WINDOWS.mpvPath],
+    relay: [WINDOWS.relayPath],
+  };
+  const wsl = { WSL_DISTRO_NAME: "Ubuntu" };
+  assert.deepEqual(detectWindowsMpv(wsl, candidates, find), WINDOWS);
+  assert.equal(detectWindowsMpv({}, candidates, find), undefined);
+  assert.equal(
+    detectWindowsMpv({ ...wsl, NOX_MPV_MODE: "linux" }, candidates, find),
+    undefined,
+  );
+  // Auto mode falls back to Linux mpv when a Windows piece is missing.
+  assert.equal(
+    detectWindowsMpv(wsl, { mpv: [WINDOWS.mpvPath], relay: [] }, find),
+    undefined,
+  );
+  // Forced Windows mode names what is missing instead of falling back.
+  assert.equal(
+    detectWindowsMpv(
+      { NOX_MPV_MODE: "windows" },
+      { mpv: [WINDOWS.mpvPath], relay: [] },
+      find,
+    ),
+    "Windows mpv mode needs npiperelay.exe (set NOX_NPIPERELAY_PATH)",
+  );
+  assert.equal(
+    detectWindowsMpv({ NOX_MPV_MODE: "windows" }, { mpv: [], relay: [] }, find),
+    "Windows mpv mode needs mpv.exe (set NOX_MPV_EXE_PATH)",
+  );
+  // Explicit paths win over the search.
+  assert.deepEqual(
+    detectWindowsMpv(
+      {
+        ...wsl,
+        NOX_MPV_EXE_PATH: WINDOWS.mpvPath,
+        NOX_NPIPERELAY_PATH: WINDOWS.relayPath,
+      },
+      { mpv: [], relay: [] },
+      find,
+    ),
+    WINDOWS,
+  );
+});
+
+test("Windows mode launches mpv.exe for HLS audio without the WSLg audio tuning", async (t) => {
+  const peer = memoryTransport();
+  const launches: string[][] = [];
+  const player = createYoutubePlayer({
+    windows: WINDOWS,
+    transport: peer.transport,
+    launch: (args) => {
+      launches.push(args);
+      return { kill() {}, onExit() {} };
+    },
+  });
+  t.after(() => player.dispose());
+  await player.play("https://youtu.be/abc");
+  const args = launches[0]!;
+  // Anonymous direct https stream URLs get HTTP 403 in mpv.exe; HLS audio plays.
+  assert.ok(args.includes("--ytdl-format=bestaudio[protocol^=m3u8]/bestaudio"));
+  for (const arg of args)
+    assert.doesNotMatch(arg, /^--(audio-|pulse-)|ytdl_path/, arg);
+  assert.ok(args.includes("--no-video"));
+});
+
+test("Windows mode without a transport listens on a private named pipe", () => {
+  const player = createYoutubePlayer({
+    windows: WINDOWS,
+    launch: () => ({ kill() {}, onExit() {} }),
+  });
+  assert.match(player.socketPath, /^\\\\\.\\pipe\\nox-yt-\d+-[0-9a-f]+$/);
+  player.dispose();
+});
+
+test("a forced Windows mode with a missing piece fails play with its reason", async () => {
+  const player = createYoutubePlayer({
+    windows: "Windows mpv mode needs mpv.exe (set NOX_MPV_EXE_PATH)",
+    launch: () => assert.fail("must not launch"),
+  });
+  await assert.rejects(player.play("https://youtu.be/abc"), {
+    message: "Windows mpv mode needs mpv.exe (set NOX_MPV_EXE_PATH)",
+  });
+  assert.equal(player.running, false);
+});
+
+test("Windows mode force-kills mpv.exe by its Windows PID when it is still alive", async (t) => {
+  const peer = memoryTransport(4242);
+  const killed: number[] = [];
+  let exit: ((code: number | null) => void) | undefined;
+  const player = createYoutubePlayer({
+    windows: WINDOWS,
+    transport: peer.transport,
+    forceKill: (pid) => killed.push(pid),
+    launch: () => ({ kill() {}, onExit: (callback) => void (exit = callback) }),
+    quitTimeoutMs: 20,
+  });
+  t.after(() => player.dispose());
+  await player.play("https://youtu.be/abc");
+  await until(() =>
+    peer.written.some((message) => message.command[1] === "pid"),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await player.stop();
+  assert.deepEqual(killed, [4242]);
+
+  // A process that already exited is never killed by a possibly reused PID.
+  await player.play("https://youtu.be/abc");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  exit!(0);
+  await player.stop();
+  assert.deepEqual(killed, [4242]);
+});
+
+test("npipeTransport talks to mpv through the relay's stdio", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "nox-relay-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const argsFile = join(dir, "args");
+  // A stand-in relay: records its args, then answers each line like mpv.
+  const relay = join(dir, "relay.sh");
+  writeFileSync(
+    relay,
+    `#!/bin/sh\necho "$@" > ${argsFile}\nwhile read line; do echo '{"request_id":0,"error":"success"}'; done\n`,
+    { mode: 0o755 },
+  );
+  const transport = npipeTransport("nox-yt-test", relay);
+  assert.equal(transport.address, "\\\\.\\pipe\\nox-yt-test");
+  const connection = await transport.connect();
+  assert.ok(connection);
+  assert.equal(
+    readFileSync(argsFile, "utf8").trim(),
+    "-ep -ei -s //./pipe/nox-yt-test",
+  );
+  const lines: string[] = [];
+  connection.onData((chunk) => lines.push(chunk));
+  connection.write('{"command":["cycle","pause"],"request_id":7}\n');
+  await until(() => lines.join("").split("\n").length > 2);
+  let closed = false;
+  connection.onClose(() => (closed = true));
+  connection.destroy();
+  await until(() => closed);
+
+  // A relay that cannot open the pipe means mpv is not listening yet.
+  const failing = join(dir, "failing.sh");
+  writeFileSync(failing, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  assert.equal(
+    await npipeTransport("nox-yt-test", failing).connect(),
+    undefined,
+  );
+});
+
+test("Windows mode hands mpv.exe the detected yt-dlp as a Windows path", async (t) => {
+  assert.equal(
+    toWindowsPath("/mnt/c/Users/me/scoop/shims/yt-dlp.exe"),
+    "C:\\Users\\me\\scoop\\shims\\yt-dlp.exe",
+  );
+  assert.equal(toWindowsPath("C:\\tools\\yt-dlp.exe"), "C:\\tools\\yt-dlp.exe");
+  const ytdl = "/mnt/c/Users/me/scoop/shims/yt-dlp.exe";
+  const found = new Set([WINDOWS.mpvPath, WINDOWS.relayPath, ytdl]);
+  const detected = detectWindowsMpv(
+    { WSL_DISTRO_NAME: "Ubuntu" },
+    { mpv: [WINDOWS.mpvPath], relay: [WINDOWS.relayPath], ytdl: [ytdl] },
+    (names) => names.find((name) => found.has(name)),
+  );
+  assert.deepEqual(detected, {
+    ...WINDOWS,
+    ytdlPath: "C:\\Users\\me\\scoop\\shims\\yt-dlp.exe",
+  });
+
+  const launches: string[][] = [];
+  const player = createYoutubePlayer({
+    windows: detected,
+    transport: memoryTransport().transport,
+    launch: (args) => {
+      launches.push(args);
+      return { kill() {}, onExit() {} };
+    },
+  });
+  t.after(() => player.dispose());
+  await player.play("https://youtu.be/abc");
+  assert.ok(
+    launches[0]!.includes(
+      "--script-opts=ytdl_hook-ytdl_path=C:\\Users\\me\\scoop\\shims\\yt-dlp.exe",
+    ),
+  );
 });

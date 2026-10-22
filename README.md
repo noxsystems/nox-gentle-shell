@@ -73,7 +73,27 @@ Spotify controls and the Spotify row are TUI-only; RPC, print, and JSON do not s
 
 Unlike Spotify, YouTube offers no remote-playback API, so Nox plays audio **locally**: it launches [`mpv`](https://mpv.io) with `--no-video`, lets mpv resolve the URL through [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and drives it over mpv's JSON IPC socket. No YouTube account or API key is used; public and unlisted playlists work, private ones do not.
 
-Requirements: `mpv` on `PATH` and a **current** `yt-dlp`. Distribution packages go stale and fail against YouTube (for example `HTTP Error 400 ... No video formats found!`); install it with Homebrew (`brew install yt-dlp`, update with `brew upgrade yt-dlp`). Nox prefers `/home/linuxbrew/.linuxbrew/bin/yt-dlp` when it exists, else `yt-dlp` on `PATH`. Override with `NOX_YT_DLP_PATH` and `NOX_MPV_PATH`. On WSL2, audio reaches Windows through WSLg's PulseAudio.
+Requirements: `mpv` on `PATH` and a **current** `yt-dlp`. Distribution packages go stale and fail against YouTube (for example `HTTP Error 400 ... No video formats found!`); install it with Homebrew (`brew install yt-dlp`, update with `brew upgrade yt-dlp`). Nox prefers `/home/linuxbrew/.linuxbrew/bin/yt-dlp` when it exists, else `yt-dlp` on `PATH`. Override with `NOX_YT_DLP_PATH` and `NOX_MPV_PATH`. On WSL2, audio reaches Windows through WSLg's PulseAudio, unless Windows mpv is installed (below).
+
+### Windows-native mpv on WSL
+
+WSLg forwards audio over RDP and can stutter. When Nox runs in WSL and finds a Windows `mpv.exe` plus [`npiperelay.exe`](https://github.com/albertony/npiperelay), it plays through Windows mpv instead (clean WASAPI audio) and drives it over a private named pipe (`\\.\pipe\nox-yt-…`) bridged by npiperelay, since WSL cannot open Windows named pipes directly. Install on Windows (PowerShell):
+
+```powershell
+scoop bucket add extras
+scoop install mpv yt-dlp deno
+winget install albertony.npiperelay
+```
+
+Nox looks for `scoop\apps\mpv\current\mpv.exe`, Scoop's `yt-dlp.exe` shim, and npiperelay in Scoop, `WinGet\Links`, or `WinGet\Packages` under each Windows user. It passes yt-dlp's path to mpv.exe explicitly: Windows programs started from WSL inherit the Windows `PATH` from when WSL booted, which may predate the install. Windows mpv asks for HLS audio, because anonymous direct stream URLs fail there with `HTTP error 403 Forbidden`. Stopping quits mpv over the pipe and then ends it by its Windows PID with `taskkill`, so no `mpv.exe` outlives the session.
+
+| Variable | Effect |
+| --- | --- |
+| `NOX_MPV_MODE` | `windows` forces Windows mpv (play fails with `Windows mpv mode needs mpv.exe (set NOX_MPV_EXE_PATH)` or `... needs npiperelay.exe (set NOX_NPIPERELAY_PATH)` when one is missing); `linux` forces Linux mpv. Unset: Windows mpv when both are found on WSL, else Linux mpv. |
+| `NOX_MPV_EXE_PATH`, `NOX_NPIPERELAY_PATH` | WSL paths (`/mnt/c/...`) to `mpv.exe` and `npiperelay.exe`. |
+| `NOX_YT_DLP_EXE_PATH` | Windows `yt-dlp.exe` for mpv.exe; `/mnt/c/...` paths are converted. |
+
+With Windows mpv, `NOX_YT_COOKIES_BROWSER` is read by the Windows yt-dlp, so give it a Windows profile path (for example `firefox:C:\Users\me\AppData\Roaming\zen\Profiles\abc.Default (release)`).
 
 | Command | Effect |
 | --- | --- |

@@ -11,6 +11,7 @@ import { spotifyOverlayComponent } from "./spotify-ui.js";
 import { spotifyAuthDiagnostic } from "./spotify-auth.js";
 import {
   createYoutubePlayer,
+  detectWindowsMpv,
   youtubeOverlayComponent,
   type YoutubePlayer,
 } from "./youtube-player.js";
@@ -28,6 +29,7 @@ export default function (
   const youtube =
     injectedYoutube ??
     createYoutubePlayer({
+      windows: detectWindowsMpv(),
       onChange: () => {
         repaintYoutube?.();
         controller.repaintYoutube();
@@ -231,7 +233,8 @@ export default function (
     }
   };
   pi.registerCommand("nox-youtube", {
-    description: "YouTube playlists via local mpv: play <url>, open, pause, next, prev, stop",
+    description:
+      "YouTube playlists via local mpv: play <url>, open, pause, next, prev, stop",
     handler: async (args, ctx) => {
       const [command = "", ...rest] = args.trim().split(/\s+/);
       const warn = (message: string) => {

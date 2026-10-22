@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,9 +34,215 @@ export interface MpvProcess {
     callback: (code: number | null, signal?: NodeJS.Signals | null) => void,
   ): void;
 }
+/** One open JSON IPC connection to mpv; text is newline-delimited JSON. */
+export interface IpcConnection {
+  write(text: string): void;
+  onData(callback: (chunk: string) => void): void;
+  onClose(callback: () => void): void;
+  destroy(): void;
+}
+/** How the player reaches mpv's IPC server. */
+export interface MpvTransport {
+  /** The value passed to mpv's --input-ipc-server. */
+  address: string;
+  /** Resolves undefined while mpv is not listening yet. */
+  connect(): Promise<IpcConnection | undefined>;
+  /** Removes leftovers of a finished session, e.g. a stale socket file. */
+  cleanup(): void;
+}
+
+export function unixSocketTransport(socketPath: string): MpvTransport {
+  return {
+    address: socketPath,
+    connect: () =>
+      new Promise((resolve) => {
+        const socket = net.createConnection(socketPath);
+        socket.once("connect", () => {
+          socket.on("error", () => {});
+          resolve({
+            write: (text) => void socket.write(text),
+            onData: (callback) =>
+              void socket.on("data", (chunk) => callback(chunk.toString())),
+            onClose: (callback) => void socket.on("close", callback),
+            destroy: () => socket.destroy(),
+          });
+        });
+        socket.once("error", () => {
+          socket.destroy();
+          resolve(undefined);
+        });
+      }),
+    cleanup: () => rmSync(socketPath, { force: true }),
+  };
+}
+
+/**
+ * Windows mpv driven from WSL: mpv.exe opens a named pipe, which WSL reaches only through
+ * npiperelay.exe's stdio (Node in WSL cannot open Windows named pipes).
+ */
+export function npipeTransport(
+  name: string,
+  relayPath: string,
+  connectTimeoutMs = 3_000,
+): MpvTransport {
+  return {
+    address: `\\\\.\\pipe\\${name}`,
+    connect: () =>
+      new Promise((resolve) => {
+        // -ep ends the relay when mpv closes the pipe, -ei when we close stdin.
+        const relay = spawn(
+          relayPath,
+          ["-ep", "-ei", "-s", `//./pipe/${name}`],
+          { stdio: ["pipe", "pipe", "ignore"] },
+        );
+        let settled = false;
+        let listener: ((chunk: string) => void) | undefined;
+        const early: string[] = [];
+        const give = (value: IpcConnection | undefined) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const destroy = () => {
+          relay.stdin.end();
+          relay.kill();
+        };
+        // The relay prints nothing until the pipe answers, so a probe reply proves the
+        // connection; a missing pipe makes it exit first. request_id 0 replies are ignored.
+        const timer = setTimeout(() => {
+          destroy();
+          give(undefined);
+        }, connectTimeoutMs);
+        relay.on("error", () => give(undefined));
+        relay.once("exit", () => give(undefined));
+        relay.stdin.on("error", () => {});
+        relay.stdout.on("data", (chunk: Buffer) => {
+          const text = chunk.toString();
+          if (listener) listener(text);
+          else early.push(text);
+          give({
+            write: (text) => void relay.stdin.write(text),
+            onData: (callback) => {
+              listener = callback;
+              for (const text of early.splice(0)) callback(text);
+            },
+            onClose: (callback) => void relay.once("exit", () => callback()),
+            destroy,
+          });
+        });
+        relay.stdin.write(
+          `${JSON.stringify({ command: ["client_name"], request_id: 0 })}\n`,
+        );
+      }),
+    cleanup: () => {},
+  };
+}
+
+export interface WindowsMpv {
+  mpvPath: string;
+  relayPath: string;
+  /**
+   * Windows-form yt-dlp path for mpv.exe. Windows processes started from WSL inherit the
+   * Windows PATH from when WSL booted, which can predate installing yt-dlp.
+   */
+  ytdlPath?: string;
+}
+
+/** /mnt/c/Users/me/x.exe → C:\Users\me\x.exe; other paths are returned unchanged. */
+export function toWindowsPath(path: string): string {
+  const match = /^\/mnt\/([a-z])(\/.*)?$/.exec(path);
+  return match
+    ? `${match[1]!.toUpperCase()}:${(match[2] ?? "/").replaceAll("/", "\\")}`
+    : path;
+}
+
+/** Where Scoop and winget put mpv.exe and npiperelay.exe for each Windows user. */
+function windowsCandidates() {
+  const users = (() => {
+    try {
+      return readdirSync("/mnt/c/Users").map((user) => `/mnt/c/Users/${user}`);
+    } catch {
+      return [];
+    }
+  })();
+  const winget = (home: string) => {
+    const packages = `${home}/AppData/Local/Microsoft/WinGet/Packages`;
+    try {
+      return readdirSync(packages)
+        .filter((entry) => entry.startsWith("albertony.npiperelay"))
+        .map((entry) => `${packages}/${entry}/npiperelay.exe`);
+    } catch {
+      return [];
+    }
+  };
+  return {
+    ytdl: users.map((home) => `${home}/scoop/shims/yt-dlp.exe`),
+    // Scoop's mpv adds its app directory to PATH instead of creating a shim.
+    mpv: users.flatMap((home) => [
+      `${home}/scoop/apps/mpv/current/mpv.exe`,
+      `${home}/scoop/shims/mpv.exe`,
+    ]),
+    relay: users.flatMap((home) => [
+      `${home}/scoop/shims/npiperelay.exe`,
+      `${home}/AppData/Local/Microsoft/WinGet/Links/npiperelay.exe`,
+      ...winget(home),
+    ]),
+  };
+}
+
+/**
+ * Picks Windows mpv on WSL when mpv.exe and npiperelay.exe exist (NOX_MPV_MODE=windows|linux
+ * overrides). Returns undefined for Linux mpv, or the reason a forced Windows mode cannot run.
+ */
+export function detectWindowsMpv(
+  env: Record<string, string | undefined> = process.env,
+  candidates: {
+    mpv: string[];
+    relay: string[];
+    ytdl?: string[];
+  } = windowsCandidates(),
+  find: (paths: string[]) => string | undefined = (paths) =>
+    paths.find((path) => existsSync(path)),
+): WindowsMpv | string | undefined {
+  const mode = env.NOX_MPV_MODE;
+  if (mode === "linux") return undefined;
+  if (mode !== "windows" && !env.WSL_DISTRO_NAME) return undefined;
+  const mpvPath = env.NOX_MPV_EXE_PATH ?? find(candidates.mpv);
+  const relayPath = env.NOX_NPIPERELAY_PATH ?? find(candidates.relay);
+  if (mpvPath && relayPath) {
+    const ytdl = env.NOX_YT_DLP_EXE_PATH ?? find(candidates.ytdl ?? []);
+    return {
+      mpvPath,
+      relayPath,
+      ...(ytdl ? { ytdlPath: toWindowsPath(ytdl) } : {}),
+    };
+  }
+  if (mode !== "windows") return undefined;
+  return mpvPath
+    ? "Windows mpv mode needs npiperelay.exe (set NOX_NPIPERELAY_PATH)"
+    : "Windows mpv mode needs mpv.exe (set NOX_MPV_EXE_PATH)";
+}
+
+/**
+ * Ends a Windows process; killing its WSL interop parent does not reliably do that. The
+ * absolute path works even when WSL does not append the Windows PATH.
+ */
+export function taskkill(pid: number) {
+  spawn("/mnt/c/Windows/System32/taskkill.exe", ["/PID", String(pid), "/F"], {
+    stdio: "ignore",
+  }).on("error", () => {});
+}
+
 export interface YoutubePlayerOptions {
   launch?: (args: string[]) => MpvProcess;
   socketPath?: string;
+  /** Windows mpv from detectWindowsMpv, or the reason forced Windows mode cannot run. */
+  windows?: WindowsMpv | string;
+  /** Ends mpv by its own PID when Windows mpv outlives its interop process. */
+  forceKill?: (pid: number) => void;
+  /** Overrides the unix socket transport; socketPath is then ignored. */
+  transport?: MpvTransport;
   mpvPath?: string;
   ytdlPath?: string;
   /**
@@ -120,17 +327,33 @@ export function spawnMpv(mpvPath: string, killGraceMs = 2_000) {
 }
 
 export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
-  const mpvPath = options.mpvPath ?? process.env.NOX_MPV_PATH ?? "mpv";
+  const windows =
+    typeof options.windows === "object" ? options.windows : undefined;
+  const windowsError =
+    typeof options.windows === "string" ? options.windows : undefined;
+  const mpvPath =
+    options.mpvPath ?? windows?.mpvPath ?? process.env.NOX_MPV_PATH ?? "mpv";
   const ytdlPath =
     options.ytdlPath ??
     process.env.NOX_YT_DLP_PATH ??
     // Distribution builds of yt-dlp go stale fast; prefer Homebrew's when present.
     (existsSync(BREW_YT_DLP) ? BREW_YT_DLP : "yt-dlp");
   // A private 0700 directory keeps other local users from racing or reaching the IPC socket.
-  const privateDir = options.socketPath
-    ? undefined
-    : mkdtempSync(join(tmpdir(), "nox-youtube-"));
-  const socketPath = options.socketPath ?? join(privateDir!, "mpv.sock");
+  const privateDir =
+    options.transport || options.socketPath || windows
+      ? undefined
+      : mkdtempSync(join(tmpdir(), "nox-youtube-"));
+  const transport =
+    options.transport ??
+    (windows
+      ? npipeTransport(
+          `nox-yt-${process.pid}-${randomBytes(4).toString("hex")}`,
+          windows.relayPath,
+        )
+      : unixSocketTransport(
+          options.socketPath ?? join(privateDir!, "mpv.sock"),
+        ));
+  const forceKill = options.forceKill ?? (windows ? taskkill : undefined);
   const quitTimeout = options.quitTimeoutMs ?? 1_000;
   const launch = options.launch ?? spawnMpv(mpvPath);
   const cookies =
@@ -140,7 +363,9 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
 
   let snapshot: YoutubeSnapshot | undefined;
   let mpv: MpvProcess | undefined;
-  let socket: net.Socket | undefined;
+  let socket: IpcConnection | undefined;
+  /** mpv's own PID, known only while it runs and forceKill is set. */
+  let mpvPid: number | undefined;
   let generation = 0;
   let requestId = 0;
   let failures = 0;
@@ -150,7 +375,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
   let loaded = false;
   const pending = new Map<
     number,
-    { resolve: () => void; reject: (error: Error) => void }
+    { resolve: (data: unknown) => void; reject: (error: Error) => void }
   >();
 
   const changed = () => options.onChange?.();
@@ -164,13 +389,15 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
     socket?.destroy();
     socket = undefined;
     failPending();
+    if (mpv && mpvPid !== undefined) forceKill?.(mpvPid);
+    mpvPid = undefined;
     mpv?.kill();
     mpv = undefined;
-    rmSync(socketPath, { force: true });
+    transport.cleanup();
   };
 
   const send = (command: unknown[]) =>
-    new Promise<void>((resolve, reject) => {
+    new Promise<unknown>((resolve, reject) => {
       if (!socket) {
         reject(new Error("YouTube player is not running"));
         return;
@@ -265,7 +492,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
     } else if (message.request_id && pending.has(message.request_id)) {
       const request = pending.get(message.request_id)!;
       pending.delete(message.request_id);
-      if (message.error === "success") request.resolve();
+      if (message.error === "success") request.resolve(message.data);
       else request.reject(new Error(`mpv: ${message.error ?? "error"}`));
     }
   };
@@ -273,14 +500,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
   const connect = async (version: number) => {
     for (let attempt = 0; attempt < CONNECT_ATTEMPTS; attempt++) {
       if (version !== generation) return;
-      const connected = await new Promise<net.Socket | undefined>((resolve) => {
-        const candidate = net.createConnection(socketPath);
-        candidate.once("connect", () => resolve(candidate));
-        candidate.once("error", () => {
-          candidate.destroy();
-          resolve(undefined);
-        });
-      });
+      const connected = await transport.connect();
       if (connected) {
         if (version !== generation) {
           connected.destroy();
@@ -288,25 +508,32 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
         }
         socket = connected;
         let buffer = "";
-        connected.on("data", (chunk) => {
-          buffer += chunk.toString();
+        connected.onData((chunk) => {
+          buffer += chunk;
           let newline: number;
           while ((newline = buffer.indexOf("\n")) >= 0) {
             onMessage(buffer.slice(0, newline));
             buffer = buffer.slice(newline + 1);
           }
         });
-        connected.on("close", () => {
+        connected.onClose(() => {
           if (socket === connected) {
             socket = undefined;
             failPending();
           }
         });
-        connected.on("error", () => {});
         OBSERVED.forEach(
           (name, index) =>
             void send(["observe_property", index + 1, name]).catch(() => {}),
         );
+        if (forceKill)
+          void send(["get_property", "pid"]).then(
+            (pid) => {
+              if (version === generation && typeof pid === "number")
+                mpvPid = pid;
+            },
+            () => {},
+          );
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, retryDelay));
@@ -341,15 +568,28 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
       "--no-video",
       "--no-terminal",
       "--idle=no",
-      `--input-ipc-server=${socketPath}`,
-      `--script-opts=ytdl_hook-ytdl_path=${ytdlPath}`,
-      // WSLg forwards audio over RDP to a 44.1 kHz s16 stereo sink that stutters with
-      // mpv's defaults; matching its format and deepening both buffers keeps it smooth.
-      "--audio-samplerate=44100",
-      "--audio-format=s16",
-      "--audio-channels=stereo",
-      "--audio-buffer=2",
-      "--pulse-buffer=1000",
+      `--input-ipc-server=${transport.address}`,
+      ...(windows
+        ? // mpv.exe resolves through the Windows yt-dlp on its PATH and plays through
+          // WASAPI. Anonymous direct https stream URLs get HTTP 403 there; HLS audio plays.
+          [
+            ...(windows.ytdlPath
+              ? [`--script-opts=ytdl_hook-ytdl_path=${windows.ytdlPath}`]
+              : []),
+            ...(usingCookies
+              ? []
+              : ["--ytdl-format=bestaudio[protocol^=m3u8]/bestaudio"]),
+          ]
+        : [
+            `--script-opts=ytdl_hook-ytdl_path=${ytdlPath}`,
+            // WSLg forwards audio over RDP to a 44.1 kHz s16 stereo sink that stutters with
+            // mpv's defaults; matching its format and deepening both buffers keeps it smooth.
+            "--audio-samplerate=44100",
+            "--audio-format=s16",
+            "--audio-channels=stereo",
+            "--audio-buffer=2",
+            "--pulse-buffer=1000",
+          ]),
       // mpv plays only the video of a watch?v=…&list=… URL unless yt-dlp is told otherwise.
       "--ytdl-raw-options-append=yes-playlist=",
       // Mixes (list=RD…) are endless radios; resolving them whole takes 20+ seconds.
@@ -375,6 +615,8 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
     mpv = process;
     process.onExit((code) => {
       if (mpv !== process) return;
+      // It is gone; its PID may already belong to another process.
+      mpvPid = undefined;
       if (!loaded && canFallBack()) {
         fallBackToCookies(snapshot?.index);
         return;
@@ -419,6 +661,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
     },
     async play(target: string) {
       if (!isYoutubeUrl(target)) throw new Error("Not a YouTube URL");
+      if (windowsError) throw new Error(windowsError);
       url = target;
       usingCookies = false;
       await start();
@@ -447,7 +690,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
       );
     },
     get socketPath() {
-      return socketPath;
+      return transport.address;
     },
     async stop() {
       // An unresponsive mpv must not keep stop() from killing it.
