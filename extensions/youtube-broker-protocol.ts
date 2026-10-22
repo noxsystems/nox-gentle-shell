@@ -8,7 +8,6 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { YoutubeAction, YoutubeSnapshot } from "./youtube-player.js";
 
@@ -202,6 +201,17 @@ const ownedPrivately = (path: string, uid: number, kind: "dir" | "file") => {
 };
 
 /**
+ * Where the per-user shared directory lives. It must be the same for every Pi session, and Pi
+ * sessions can each run with their own TMPDIR, so tmpdir() would give each its own secret.
+ */
+export function sharedYoutubeBase(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const runtime = env.XDG_RUNTIME_DIR;
+  return runtime?.startsWith("/") ? runtime : "/tmp";
+}
+
+/**
  * The per-user directory holding the shared secret, or undefined when sharing must not be used
  * (not Linux, or the directory is not a private real directory owned by this user). Callers
  * then fall back to a private per-session player.
@@ -213,7 +223,7 @@ export function sharedYoutubeDir(
   const uid = options.uid ?? process.getuid?.();
   if (platform !== "linux" || uid === undefined) return undefined;
   if (uid !== process.getuid?.()) return undefined;
-  const dir = join(options.base ?? tmpdir(), `nox-youtube-${uid}`);
+  const dir = join(options.base ?? sharedYoutubeBase(), `nox-youtube-${uid}`);
   try {
     mkdirSync(dir, { mode: 0o700 });
   } catch (error) {

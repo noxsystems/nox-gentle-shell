@@ -22,6 +22,7 @@ import {
   macMatches,
   parseBrokerMessage,
   parseClientMessage,
+  sharedYoutubeBase,
   sharedYoutubeDir,
   type BrokerMessage,
   type ClientMessage,
@@ -1287,4 +1288,17 @@ test("a leaver that never sends FIN is closed by the broker after a short grace 
     [],
     "the broker still holds an open socket",
   );
+});
+
+test("the shared directory base is the same for every Pi session, whatever its TMPDIR", () => {
+  // Each Pi session can run with its own TMPDIR; a tmpdir()-based base gave every session its own
+  // secret, so other sessions failed authentication and never saw the playback.
+  assert.equal(
+    sharedYoutubeBase({ XDG_RUNTIME_DIR: "/run/user/1000", TMPDIR: "/tmp/a" }),
+    "/run/user/1000",
+  );
+  assert.equal(sharedYoutubeBase({ TMPDIR: "/tmp/a" }), "/tmp");
+  assert.equal(sharedYoutubeBase({ TMPDIR: "/tmp/b" }), "/tmp");
+  // A relative runtime dir is not trusted.
+  assert.equal(sharedYoutubeBase({ XDG_RUNTIME_DIR: "run/user" }), "/tmp");
 });
