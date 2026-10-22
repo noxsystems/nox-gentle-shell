@@ -991,7 +991,10 @@ test("npipeTransport talks to mpv through the relay's stdio", async (t) => {
   // A relay that cannot open the pipe means mpv is not listening yet.
   const failing = join(dir, "failing.sh");
   writeFileSync(failing, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-  assert.equal(await npipeTransport("nox-yt-test", failing).connect(), undefined);
+  assert.equal(
+    await npipeTransport("nox-yt-test", failing).connect(),
+    undefined,
+  );
 });
 
 test("Windows mode hands mpv.exe the detected yt-dlp as a Windows path", async (t) => {

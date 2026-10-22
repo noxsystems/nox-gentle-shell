@@ -233,7 +233,8 @@ export default function (
     }
   };
   pi.registerCommand("nox-youtube", {
-    description: "YouTube playlists via local mpv: play <url>, open, pause, next, prev, stop",
+    description:
+      "YouTube playlists via local mpv: play <url>, open, pause, next, prev, stop",
     handler: async (args, ctx) => {
       const [command = "", ...rest] = args.trim().split(/\s+/);
       const warn = (message: string) => {

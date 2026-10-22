@@ -229,11 +229,9 @@ export function detectWindowsMpv(
  * absolute path works even when WSL does not append the Windows PATH.
  */
 export function taskkill(pid: number) {
-  spawn(
-    "/mnt/c/Windows/System32/taskkill.exe",
-    ["/PID", String(pid), "/F"],
-    { stdio: "ignore" },
-  ).on("error", () => {});
+  spawn("/mnt/c/Windows/System32/taskkill.exe", ["/PID", String(pid), "/F"], {
+    stdio: "ignore",
+  }).on("error", () => {});
 }
 
 export interface YoutubePlayerOptions {
@@ -334,10 +332,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
   const windowsError =
     typeof options.windows === "string" ? options.windows : undefined;
   const mpvPath =
-    options.mpvPath ??
-    windows?.mpvPath ??
-    process.env.NOX_MPV_PATH ??
-    "mpv";
+    options.mpvPath ?? windows?.mpvPath ?? process.env.NOX_MPV_PATH ?? "mpv";
   const ytdlPath =
     options.ytdlPath ??
     process.env.NOX_YT_DLP_PATH ??
@@ -532,10 +527,13 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
             void send(["observe_property", index + 1, name]).catch(() => {}),
         );
         if (forceKill)
-          void send(["get_property", "pid"]).then((pid) => {
-            if (version === generation && typeof pid === "number")
-              mpvPid = pid;
-          }, () => {});
+          void send(["get_property", "pid"]).then(
+            (pid) => {
+              if (version === generation && typeof pid === "number")
+                mpvPid = pid;
+            },
+            () => {},
+          );
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, retryDelay));
