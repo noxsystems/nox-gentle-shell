@@ -11,6 +11,7 @@ import { spotifyOverlayComponent } from "./spotify-ui.js";
 import { spotifyAuthDiagnostic } from "./spotify-auth.js";
 import {
   createYoutubePlayer,
+  detectWindowsMpv,
   youtubeOverlayComponent,
   type YoutubePlayer,
 } from "./youtube-player.js";
@@ -28,6 +29,7 @@ export default function (
   const youtube =
     injectedYoutube ??
     createYoutubePlayer({
+      windows: detectWindowsMpv(),
       onChange: () => {
         repaintYoutube?.();
         controller.repaintYoutube();
