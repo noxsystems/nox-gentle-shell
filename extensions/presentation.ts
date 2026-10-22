@@ -8,6 +8,11 @@ import {
   spotifyTimes,
   type SpotifySnapshot,
 } from "./spotify-ui.js";
+import {
+  youtubeGauge,
+  youtubeTimes,
+  type YoutubeSnapshot,
+} from "./youtube-player.js";
 
 export interface HeaderOptions {
   title: string;
@@ -165,6 +170,7 @@ export interface TelemetryRenderOptions {
   /** Optional so pure callers retain the existing unstyled string contract. */
   theme?: Theme;
   spotify?: SpotifySnapshot;
+  youtube?: YoutubeSnapshot;
   now?: number;
   /** Latest event-driven process-wide RSS sample, not conversation memory. */
   rssBytes?: number;
@@ -276,6 +282,7 @@ export function renderDetailedTelemetry({
   maxWidth,
   theme,
   spotify,
+  youtube,
   now,
   rssBytes,
   processMemory,
@@ -381,6 +388,34 @@ export function renderDetailedTelemetry({
               ...(gauge && times
                 ? [
                     `${paintSpotifyGauge(gauge, (role, text) => telemetryRole(theme, role, text))} ${telemetryRole(theme, "text", times)}`,
+                  ]
+                : []),
+            ];
+          })()
+        : []),
+      ...(youtube
+        ? (() => {
+            const gauge = youtube.error ? undefined : youtubeGauge(youtube);
+            const entry =
+              youtube.count && youtube.index !== undefined
+                ? ` · ${youtube.index + 1}/${youtube.count}`
+                : "";
+            const marker = youtube.error ? "—" : youtube.paused ? "⏸" : "▶";
+            return [
+              telemetryRole(
+                theme,
+                "border",
+                "─".repeat(Math.max(0, maxWidth - 4)),
+              ),
+              `${telemetryRole(theme, "accent", "YouTube")} ${telemetryRole(theme, "muted", "·")} ${telemetryRole(theme, "text", `${marker}${youtube.error ? "" : entry}`)}`,
+              telemetryRole(
+                theme,
+                "text",
+                youtube.error ?? youtube.title ?? "Loading…",
+              ),
+              ...(gauge
+                ? [
+                    `${paintSpotifyGauge(gauge, (role, text) => telemetryRole(theme, role, text))} ${telemetryRole(theme, "text", youtubeTimes(youtube))}`,
                   ]
                 : []),
             ];

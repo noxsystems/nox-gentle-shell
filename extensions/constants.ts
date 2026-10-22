@@ -18,6 +18,10 @@ export const NOX_GENTLE_SHELL_SHORTCUTS = {
     identifier: "nox-gentle-shell.shortcut.toggle-visibility",
     key: "ctrl+alt+n",
   },
+  openYoutube: {
+    identifier: "nox-gentle-shell.shortcut.open-youtube",
+    key: "ctrl+alt+y",
+  },
 } as const;
 
 export const NOX_GENTLE_SHELL_IDENTIFIERS = [
@@ -28,4 +32,5 @@ export const NOX_GENTLE_SHELL_IDENTIFIERS = [
   NOX_GENTLE_SHELL_SHORTCUTS.cycleMode.identifier,
   NOX_GENTLE_SHELL_SHORTCUTS.openSpotify.identifier,
   NOX_GENTLE_SHELL_SHORTCUTS.toggleVisibility.identifier,
+  NOX_GENTLE_SHELL_SHORTCUTS.openYoutube.identifier,
 ] as const;

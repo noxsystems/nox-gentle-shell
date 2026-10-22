@@ -1,3 +1,4 @@
+import type { YoutubePlayer } from "../extensions/youtube-player.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import visualLayerExtension from "../extensions/visual-layer.js";
@@ -15,6 +16,7 @@ type RegisteredShortcut = { key: string; options: { handler: Function } };
 
 function createExtensionRegistration(
   controller?: ReturnType<typeof createVisualController>,
+  youtube?: YoutubePlayer,
 ) {
   const handlers = new Map<string, Function[]>();
   const commands: RegisteredCommand[] = [];
@@ -33,7 +35,7 @@ function createExtensionRegistration(
     },
   };
 
-  visualLayerExtension(mockPi as never, controller);
+  visualLayerExtension(mockPi as never, controller, youtube);
   return { handlers, commands, shortcuts };
 }
 
@@ -70,11 +72,11 @@ test("registers distinct namespaced commands, mode shortcut, and telemetry lifec
 
   assert.deepEqual(
     commands.map((command) => command.name),
-    [NOX_GENTLE_SHELL_COMMAND_NAME, "nox-spotify"],
+    [NOX_GENTLE_SHELL_COMMAND_NAME, "nox-spotify", "nox-youtube"],
   );
   assert.deepEqual(
     shortcuts.map((shortcut) => shortcut.key),
-    ["ctrl+alt+t", "ctrl+alt+p", "ctrl+alt+n"],
+    ["ctrl+alt+t", "ctrl+alt+p", "ctrl+alt+n", "ctrl+alt+y"],
   );
   for (const event of [
     "session_start",
@@ -370,4 +372,56 @@ test("session shutdown clears only namespaced TUI surfaces and remains safe when
     ["status", NOX_GENTLE_SHELL_STATUS_KEY, undefined],
     ["widget", NOX_GENTLE_SHELL_WIDGET_KEY, undefined],
   ]);
+});
+
+test("nox-youtube command validates input, controls the player and stops it on shutdown", async () => {
+  const calls: unknown[][] = [];
+  const youtube = {
+    snapshot: undefined,
+    running: false,
+    play: async (url: string) => {
+      calls.push(["play", url]);
+      if (url === "bad") throw new Error("Not a YouTube URL");
+    },
+    action: async (action: string) => void calls.push([action]),
+    stop: async () => void calls.push(["stop"]),
+    dispose: () => void calls.push(["dispose"]),
+  } as unknown as YoutubePlayer;
+  const { commands, handlers, shortcuts } = createExtensionRegistration(
+    undefined,
+    youtube,
+  );
+  const command = commands.find((entry) => entry.name === "nox-youtube")!;
+  const { ctx, calls: ui } = createContext("tui");
+
+  await command.options.handler("", ctx);
+  assert.deepEqual(ui.at(-1), [
+    "notify",
+    "Usage: /nox-youtube [play <url>|open|pause|next|prev|stop]",
+    "warning",
+  ]);
+  await command.options.handler("play bad", ctx);
+  assert.deepEqual(ui.at(-1), ["notify", "Not a YouTube URL", "warning"]);
+  await command.options.handler("play https://youtu.be/abc", ctx);
+  await command.options.handler("pause", ctx);
+  await command.options.handler("next", ctx);
+  await command.options.handler("prev", ctx);
+  await command.options.handler("stop", ctx);
+  assert.deepEqual(calls, [
+    ["play", "bad"],
+    ["play", "https://youtu.be/abc"],
+    ["toggle"],
+    ["next"],
+    ["previous"],
+    ["stop"],
+  ]);
+
+  const { ctx: printCtx, calls: printUi } = createContext("print");
+  await command.options.handler("open", printCtx);
+  assert.deepEqual(printUi, []);
+  assert.ok(shortcuts.some((entry) => entry.key === "ctrl+alt+y"));
+
+  for (const handler of handlers.get("session_shutdown") ?? [])
+    handler({}, ctx);
+  assert.deepEqual(calls.at(-1), ["dispose"]);
 });

@@ -13,6 +13,7 @@ import {
   createSpotifyController,
   type SpotifyController,
 } from "./spotify-ui.js";
+import type { YoutubeSnapshot } from "./youtube-player.js";
 import {
   aggregateTelemetry,
   reduceActiveTools,
@@ -81,6 +82,10 @@ function emptyState(): VisualRuntimeState {
 export interface VisualController {
   readonly state: Readonly<VisualRuntimeState>;
   readonly spotify: SpotifyController;
+  /** Where the detailed card reads the YouTube player snapshot from. */
+  setYoutubeSource(source: () => YoutubeSnapshot | undefined): void;
+  /** Re-renders the card after the YouTube player changed. */
+  repaintYoutube(): void;
   setSpotifyOverlayOpen(open: boolean, ctx: ExtensionContext): void;
   setSpotifyOverlayClose(
     close: (() => void) | undefined,
@@ -148,6 +153,7 @@ export function createVisualController(
       },
     });
   let lastContext: ExtensionContext | undefined;
+  let youtubeSource: () => YoutubeSnapshot | undefined = () => undefined;
   let spotifyOverlayOpen = false;
   let closeSpotifyOverlay: (() => void) | undefined;
   const closeOverlay = () => {
@@ -239,6 +245,7 @@ export function createVisualController(
           processMemory,
           theme: ctx.ui.theme,
           spotify: ctx.mode === "tui" ? spotifyController.snapshot : undefined,
+          youtube: ctx.mode === "tui" ? youtubeSource() : undefined,
         });
       if (ctx.mode === "tui") {
         const accepted = fullscreenContribution.update({
@@ -263,6 +270,7 @@ export function createVisualController(
                     processMemory,
                     theme,
                     spotify: spotifyController.snapshot,
+                    youtube: youtubeSource(),
                   }),
                 invalidate() {},
               }),
@@ -290,6 +298,12 @@ export function createVisualController(
     },
     get spotify() {
       return spotifyController;
+    },
+    setYoutubeSource(source) {
+      youtubeSource = source;
+    },
+    repaintYoutube() {
+      if (lastContext) apply(lastContext);
     },
     setSpotifyOverlayOpen(open, ctx) {
       spotifyOverlayOpen = open;
