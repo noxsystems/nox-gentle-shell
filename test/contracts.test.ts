@@ -242,6 +242,10 @@ test("exports stable command, UI key, contribution key, and shortcut values", ()
       identifier: "nox-gentle-shell.shortcut.toggle-visibility",
       key: "ctrl+alt+n",
     },
+    openYoutube: {
+      identifier: "nox-gentle-shell.shortcut.open-youtube",
+      key: "ctrl+alt+y",
+    },
   });
 });
 

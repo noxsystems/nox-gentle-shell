@@ -50,6 +50,7 @@ The extension does not mutate Pi settings, install anything globally, or set the
 | `Ctrl+Alt+P` | Opens the Spotify overlay without starting playback. | `/nox-spotify open` |
 | `Ctrl+Alt+N` | Hides/shows the Nox card (`detailed ↔ off`). | `/nox-gentle-shell off`, then `detailed` |
 | `Ctrl+Alt+T` | Cycles `detailed → off → detailed` (legacy binding). | `/nox-gentle-shell detailed` or `off` |
+| `Ctrl+Alt+Y` | Opens the YouTube player overlay. | `/nox-youtube open` |
 
 Every session starts in `detailed`; nothing is persisted across sessions.
 
@@ -67,6 +68,37 @@ Control playback on Spotify's **currently active Connect device**; Nox does not 
 `/nox-spotify refresh` requests a fresh playback snapshot only while the detailed TUI card or overlay is active; while off, switch to detailed or open the overlay first. Nox polls about every 20 seconds while active (errors may delay retries). `/nox-spotify disconnect` clears the current connection and asks the keyring to remove its saved refresh token; if removal fails, credentials may remain: revoke app access in Spotify or remove the keyring entry manually. Reconnect to resume. On Linux, `secret-tool` stores the refresh token in the keyring when available. Secure sharing additionally needs `flock` and a user-owned `XDG_RUNTIME_DIR` that is not group/other writable; Nox uses a private `0700` subdirectory and permanent `0600` metadata-only lockfile. A previously open tab checks the keyring again on every token lookup; refresh and disconnect are coordinated across participating processes. Only when credential coordination is unavailable before a keyring write does a new connection use memory-only storage; it is not shared with other tabs and must be repeated after restart. A failed or uncertain keyring write may already have persisted a credential; do not assume otherwise. After upgrading from an older bare-token version, reconnect once with `/nox-spotify connect`: legacy tokens are not automatically exchanged. Private XDG state holds credential generations and tombstones, never tokens; tokens remain in the keyring. Coordination requires the runtime directory and lock, while durable metadata additionally requires a writable private state directory. A lost lock or delayed keyring-service operation can leave a credential unusable or erase a later login; reconnect if this happens. Reboot can remove runtime locks, and a keyring clear cannot revoke previously issued access tokens. If a keyring lookup fails, an already-valid in-memory access token may continue briefly, but it is not evidence of a persisted login. Disconnect cannot revoke an access token already returned to a caller; subsequent lookups check the saved credential. Never put tokens or the authorization URL in shell configuration. Never share authorization URLs, codes, access tokens, or refresh tokens.
 
 Spotify controls and the Spotify row are TUI-only; RPC, print, and JSON do not show playback, and off does not show the row. With no active playback, the row says so; unavailable, revoked, restricted, or offline playback may show an error or make controls unavailable. This is not a device picker, transfer tool, or local Spotify player.
+
+## YouTube playlists (local mpv)
+
+Unlike Spotify, YouTube offers no remote-playback API, so Nox plays audio **locally**: it launches [`mpv`](https://mpv.io) with `--no-video`, lets mpv resolve the URL through [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), and drives it over mpv's JSON IPC socket. No YouTube account or API key is used; public and unlisted playlists work, private ones do not.
+
+Requirements: `mpv` on `PATH` and a **current** `yt-dlp`. Distribution packages go stale and fail against YouTube (for example `HTTP Error 400 ... No video formats found!`); install it with Homebrew (`brew install yt-dlp`, update with `brew upgrade yt-dlp`). Nox prefers `/home/linuxbrew/.linuxbrew/bin/yt-dlp` when it exists, else `yt-dlp` on `PATH`. Override with `NOX_YT_DLP_PATH` and `NOX_MPV_PATH`. On WSL2, audio reaches Windows through WSLg's PulseAudio.
+
+| Command | Effect |
+| --- | --- |
+| `/nox-youtube play <url>` | Starts the playlist or video (replacing any current one) and opens the overlay. Only `youtube.com`, `m.`/`www.`/`music.youtube.com`, and `youtu.be` http(s) URLs are accepted; others fail with `Not a YouTube URL`. |
+| `/nox-youtube open` | Opens the overlay (`Ctrl+Alt+Y`). TUI only. |
+| `/nox-youtube pause` / `next` / `prev` | Toggles pause, skips forward or back. Without a running player: `YouTube player is not running`. |
+| `/nox-youtube stop` | Quits mpv. |
+
+The detailed card also shows a YouTube section (state, playlist entry, title, and gauge) while the player has something loaded.
+
+In the overlay: Space play/pause, N next, P previous, S stop, Esc close. Closing the overlay keeps the music playing; ending the Pi session stops mpv. A `watch?v=…&list=…` URL plays the whole list. YouTube Mixes (`list=RD…`) are endless radios, so Nox loads only their first 50 entries; resolving a whole Mix takes 20+ seconds. N on the last entry or P on the first shows `No next track` / `No previous track` and keeps playing. When the playlist ends, the overlay shows `Playback finished`; if mpv exits on its own otherwise, it shows `Player stopped (exit <code>)`. Audio is sent as 44.1 kHz s16 stereo with deep buffers (`--audio-buffer=2 --pulse-buffer=1000`) because WSLg's RDP sink stutters with mpv's defaults. A track that fails to load shows `Track failed: <reason> (n/3)` and mpv moves on; after **3 consecutive failures** Nox stops mpv instead of hammering YouTube through the rest of the playlist, showing `Stopped after 3 failed tracks (<reason>)`.
+
+### When YouTube asks to confirm you're not a bot
+
+Anonymous yt-dlp requests can be blocked with `HTTP Error 429` or `Sign in to confirm you're not a bot`, even while a signed-in browser on the same machine plays fine. Set `NOX_YT_COOKIES_BROWSER` to a yt-dlp `--cookies-from-browser` value so yt-dlp reuses that browser's YouTube session. For Zen or Firefox on Windows from WSL, point at the profile holding `cookies.sqlite` (the `Default=` entry in `profiles.ini`):
+
+```nu
+$env.NOX_YT_COOKIES_BROWSER = 'firefox:/mnt/c/Users/<you>/AppData/Roaming/zen/Profiles/<profile>'
+```
+
+Cookies are a fallback, not the default: Nox always starts anonymous and relaunches mpv with cookies only after three consecutive failed tracks, or when mpv exits before any track loads, resuming at the current playlist entry. The overlay shows `Retrying with browser cookies (NOX_YT_COOKIES_BROWSER)` while it switches. If the cookie session fails too, playback stops with `Stopped after 3 failed tracks (<cause>), even with browser cookies.` Each new selection starts anonymous again.
+
+With cookies, Nox also asks yt-dlp for the `web_safari` client and HLS streams capped at 360p: the default clients return stream URLs that mpv's ffmpeg cannot fetch under a signed-in session (`HTTP error 403 Forbidden`), and Safari's HLS carries muxed video, so the cap keeps bandwidth under about 1 Mbps (mpv still decodes audio only). yt-dlp needs a JavaScript runtime such as `deno` to solve YouTube's challenges.
+
+**Security:** this lets yt-dlp read your browser's Google session cookies. Nox never reads, logs, or copies them itself, and nothing is read unless the variable is set and anonymous playback has failed; still, anything that controls that yt-dlp process acts with your YouTube account. Use it only on a machine you trust. Unset it to go back to anonymous requests. Each selection takes a few seconds while yt-dlp resolves it. Playing YouTube outside its official player may conflict with YouTube's Terms of Service; this is meant for personal use.
 
 ## Telemetry semantics and limitations
 

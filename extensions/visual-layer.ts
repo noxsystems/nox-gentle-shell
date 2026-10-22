@@ -9,15 +9,38 @@ import {
 import { createVisualController, type VisualController } from "./runtime.js";
 import { spotifyOverlayComponent } from "./spotify-ui.js";
 import { spotifyAuthDiagnostic } from "./spotify-auth.js";
+import {
+  createYoutubePlayer,
+  youtubeOverlayComponent,
+  type YoutubePlayer,
+} from "./youtube-player.js";
+
+const YOUTUBE_USAGE =
+  "Usage: /nox-youtube [play <url>|open|pause|next|prev|stop]";
 
 export default function (
   pi: ExtensionAPI,
   injectedController?: VisualController,
+  injectedYoutube?: YoutubePlayer,
 ) {
   const controller = injectedController ?? createVisualController(pi.events);
+  let repaintYoutube: (() => void) | undefined;
+  const youtube =
+    injectedYoutube ??
+    createYoutubePlayer({
+      onChange: () => {
+        repaintYoutube?.();
+        controller.repaintYoutube();
+      },
+    });
+  controller.setYoutubeSource(() => youtube.snapshot);
 
   pi.on("session_start", (_event, ctx) => controller.start(ctx));
-  pi.on("session_shutdown", (_event, ctx) => controller.cleanup(ctx));
+  pi.on("session_shutdown", (_event, ctx) => {
+    // mpv is a separate process; it must not outlive the session.
+    youtube.dispose();
+    controller.cleanup(ctx);
+  });
 
   pi.on("message_start", (_event, ctx) => controller.refresh(ctx));
   pi.on("message_update", (_event, ctx) => controller.refresh(ctx));
@@ -184,6 +207,52 @@ export default function (
     },
   });
 
+  let youtubeOverlayOpen = false;
+  const openYoutube = async (ctx: ExtensionContext) => {
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
+    if (youtubeOverlayOpen) return;
+    youtubeOverlayOpen = true;
+    try {
+      await ctx.ui.custom<void>(
+        (tui, theme, _keys, done) => {
+          repaintYoutube = () => tui.requestRender();
+          return youtubeOverlayComponent(
+            youtube,
+            theme,
+            () => tui.requestRender(),
+            done,
+          );
+        },
+        { overlay: true },
+      );
+    } finally {
+      repaintYoutube = undefined;
+      youtubeOverlayOpen = false;
+    }
+  };
+  pi.registerCommand("nox-youtube", {
+    description: "YouTube playlists via local mpv: play <url>, open, pause, next, prev, stop",
+    handler: async (args, ctx) => {
+      const [command = "", ...rest] = args.trim().split(/\s+/);
+      const warn = (message: string) => {
+        if (ctx.hasUI) ctx.ui.notify(message, "warning");
+      };
+      try {
+        if (command === "play" && rest.length === 1) {
+          await youtube.play(rest[0]!);
+          await openYoutube(ctx);
+        } else if (command === "open") await openYoutube(ctx);
+        else if (command === "pause") await youtube.action("toggle");
+        else if (command === "next") await youtube.action("next");
+        else if (command === "prev") await youtube.action("previous");
+        else if (command === "stop") await youtube.stop();
+        else warn(YOUTUBE_USAGE);
+      } catch (error) {
+        warn(error instanceof Error ? error.message : String(error));
+      }
+    },
+  });
+
   pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.cycleMode.key, {
     description: "Cycle Nox visual mode",
     handler: (ctx) => controller.cycleMode(ctx),
@@ -195,5 +264,9 @@ export default function (
   pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.toggleVisibility.key, {
     description: "Hide/show the Nox card",
     handler: (ctx) => controller.toggleVisibility(ctx),
+  });
+  pi.registerShortcut(NOX_GENTLE_SHELL_SHORTCUTS.openYoutube.key, {
+    description: "Open the YouTube player overlay",
+    handler: openYoutube,
   });
 }

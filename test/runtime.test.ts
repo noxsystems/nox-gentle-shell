@@ -199,7 +199,11 @@ test("commands and shortcuts cycle modes and reject invalid input without changi
   controller.runCommand("off", ctx as never);
   controller.runCommand("compact", ctx as never);
   assert.equal(controller.state.mode, "detailed");
-  assert.deepEqual(calls.at(-1), ["notify", "ℹ Nox visual mode: detailed", "info"]);
+  assert.deepEqual(calls.at(-1), [
+    "notify",
+    "ℹ Nox visual mode: detailed",
+    "info",
+  ]);
 
   controller.cycleMode(ctx as never);
   assert.equal(controller.state.mode, "off");
@@ -922,4 +926,39 @@ test("start, refresh, off, and shutdown never call singleton UI APIs", () => {
   controller.cleanup(ctx as never);
 
   assert.ok(calls.every(([surface]) => !SINGLETON_UI_SURFACES.has(surface)));
+});
+
+test("YouTube player changes repaint the card with the YouTube section in TUI only", () => {
+  const { ctx, calls } = createContext();
+  const controller = createVisualController();
+  let snapshot:
+    | { title: string; paused: boolean; position: number; updatedAt: number }
+    | undefined;
+  controller.setYoutubeSource(() => snapshot);
+  controller.start(ctx as never);
+  const widgets = () => calls.filter(([surface]) => surface === "widget");
+  const render = () =>
+    (widgets().at(-1)?.[2] as Function)(
+      {},
+      { fg: (_role: string, text: string) => text },
+    )
+      .render(60)
+      .join("\n");
+  assert.doesNotMatch(render(), /YouTube/);
+
+  snapshot = { title: "California", paused: false, position: 0, updatedAt: 1 };
+  const before = widgets().length;
+  controller.repaintYoutube();
+  assert.equal(widgets().length, before + 1);
+  assert.match(render(), /YouTube · ▶/);
+  assert.match(render(), /California/);
+
+  const rpc = createContext("rpc");
+  const rpcController = createVisualController();
+  rpcController.setYoutubeSource(() => snapshot);
+  rpcController.start(rpc.ctx as never);
+  assert.doesNotMatch(
+    String(rpc.calls.filter(([surface]) => surface === "widget").at(-1)?.[2]),
+    /YouTube/,
+  );
 });

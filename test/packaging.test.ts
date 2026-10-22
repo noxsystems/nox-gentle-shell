@@ -21,6 +21,7 @@ const EXPECTED_PACKED_FILES = [
   "extensions/spotify-ui.ts",
   "extensions/telemetry.ts",
   "extensions/visual-layer.ts",
+  "extensions/youtube-player.ts",
   "package.json",
   "themes/nox-gentle-shell.json",
 ];
@@ -71,6 +72,7 @@ test("package manifest publishes only runtime sources, metadata, and README", ()
     "extensions/spotify-ui.ts",
     "extensions/telemetry.ts",
     "extensions/visual-layer.ts",
+    "extensions/youtube-player.ts",
     "package.json",
     "themes/nox-gentle-shell.json",
   ]);

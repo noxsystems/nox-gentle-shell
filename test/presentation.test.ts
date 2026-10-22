@@ -846,3 +846,72 @@ describe("Edge cases and Matrix testing", () => {
     }
   });
 });
+
+test("YouTube card section shows only while the player holds a snapshot", () => {
+  const telemetry = {
+    context: { tokens: 10, contextWindow: 100, percent: 10 },
+    usage: {
+      input: 2,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 5,
+      cost: 0,
+    },
+    counts: { messageEntries: 1, assistantTurns: 1 },
+  };
+  const render = (
+    youtube?: Parameters<typeof renderDetailedTelemetry>[0]["youtube"],
+    maxWidth = 60,
+  ) =>
+    renderDetailedTelemetry({
+      telemetry,
+      activeTools: {},
+      maxWidth,
+      youtube,
+      theme: createMockTheme(),
+    });
+  const plain = (lines: string[]) => lines.map(stripAnsi).join("\n");
+
+  assert.doesNotMatch(plain(render()), /YouTube/);
+
+  const playing = {
+    title: "California",
+    paused: false,
+    position: 15,
+    duration: 180,
+    index: 2,
+    count: 50,
+    updatedAt: 1,
+  };
+  const card = plain(render(playing));
+  assert.match(card, /YouTube · ▶ · 3\/50/);
+  assert.match(card, /│ California +│/);
+  assert.match(card, /▰▱▱▱▱▱▱▱ 0:15\/3:00/);
+
+  assert.match(
+    plain(render({ ...playing, paused: true })),
+    /YouTube · ⏸ · 3\/50/,
+  );
+  assert.match(
+    plain(render({ paused: false, position: 0, updatedAt: 1 })),
+    /YouTube · ▶ +│\n│ Loading… +│/,
+  );
+  const stopped = plain(
+    render({
+      paused: true,
+      position: 0,
+      updatedAt: 1,
+      error: "Playback finished",
+    }),
+  );
+  assert.match(stopped, /YouTube · — +│\n│ Playback finished +│/);
+  assert.doesNotMatch(stopped, /▰|▱/);
+
+  for (const maxWidth of [1, 2, 8, 20, 47, 80])
+    assert.ok(
+      render(playing, maxWidth).every(
+        (line) => visibleWidth(line) === maxWidth,
+      ),
+    );
+});
