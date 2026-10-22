@@ -1,6 +1,7 @@
 import type { YoutubePlayer } from "../extensions/youtube-player.js";
 import test from "node:test";
 import assert from "node:assert/strict";
+import net from "node:net";
 import visualLayerExtension from "../extensions/visual-layer.js";
 import { createVisualController } from "../extensions/runtime.js";
 import { createSpotifyController } from "../extensions/spotify-ui.js";
@@ -11,12 +12,50 @@ import {
   NOX_GENTLE_SHELL_WIDGET_KEY,
 } from "../extensions/constants.js";
 
+// L11: no test may touch the real per-user broker. Anything that tries to connect to or bind
+// the real abstract name fails loudly instead of joining a live session's broker.
+const REAL_BROKER = `\0nox-yt-${process.getuid?.() ?? 0}`;
+// net.createConnection hands connect() a normalized [options, callback] array.
+const pathOf = (first: unknown): string | undefined => {
+  const value = Array.isArray(first) ? first[0] : first;
+  return typeof value === "string"
+    ? value
+    : (value as { path?: string } | undefined)?.path;
+};
+for (const [proto, method] of [
+  [net.Socket.prototype, "connect"],
+  [net.Server.prototype, "listen"],
+] as const) {
+  const original = (
+    proto as unknown as Record<string, (...a: unknown[]) => unknown>
+  )[method]!;
+  (proto as unknown as Record<string, unknown>)[method] = function (
+    this: unknown,
+    ...args: unknown[]
+  ) {
+    if (pathOf(args[0]) === REAL_BROKER)
+      throw new Error("a test tried to use the real YouTube broker");
+    return original.apply(this, args);
+  };
+}
+
 type RegisteredCommand = { name: string; options: { handler: Function } };
 type RegisteredShortcut = { key: string; options: { handler: Function } };
+
+/** A player that does nothing: the default one would join the real per-user broker. */
+const inertYoutube = {
+  snapshot: undefined,
+  running: false,
+  play: async () => {},
+  action: async () => {},
+  stop: async () => {},
+  dispose: () => {},
+} as unknown as YoutubePlayer;
 
 function createExtensionRegistration(
   controller?: ReturnType<typeof createVisualController>,
   youtube?: YoutubePlayer,
+  createYoutube?: () => YoutubePlayer,
 ) {
   const handlers = new Map<string, Function[]>();
   const commands: RegisteredCommand[] = [];
@@ -35,7 +74,12 @@ function createExtensionRegistration(
     },
   };
 
-  visualLayerExtension(mockPi as never, controller, youtube);
+  visualLayerExtension(
+    mockPi as never,
+    controller,
+    youtube ?? (createYoutube ? undefined : inertYoutube),
+    createYoutube,
+  );
   return { handlers, commands, shortcuts };
 }
 
@@ -424,4 +468,68 @@ test("nox-youtube command validates input, controls the player and stops it on s
   for (const handler of handlers.get("session_shutdown") ?? [])
     handler({}, ctx);
   assert.deepEqual(calls.at(-1), ["dispose"]);
+});
+
+test("session shutdown tells the YouTube player why, and waits for it to let go", async () => {
+  const reasons: unknown[] = [];
+  let released = false;
+  const youtube = {
+    snapshot: undefined,
+    running: false,
+    dispose: async (reason?: string) => {
+      reasons.push(reason);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      released = true;
+    },
+  } as unknown as YoutubePlayer;
+  const { handlers } = createExtensionRegistration(undefined, youtube);
+  const { ctx } = createContext("tui");
+  const [shutdown] = handlers.get("session_shutdown") ?? [];
+  await shutdown!({ reason: "reload" }, ctx);
+  assert.deepEqual(reasons, ["reload"]);
+  // Pi must not tear the process down before a handoff or an mpv stop has finished.
+  assert.equal(released, true);
+});
+
+test("loading the extension has no side effects: the YouTube player is created on session_start", async () => {
+  let created = 0;
+  const { handlers } = createExtensionRegistration(undefined, undefined, () => {
+    created++;
+    return inertYoutube;
+  });
+  // Pi's loader runs the factory when it merely lists extensions; that must not join a broker.
+  assert.equal(created, 0);
+  const { ctx } = createContext("tui");
+  // A shutdown of a session that never started has nothing to dispose either.
+  for (const handler of handlers.get("session_shutdown") ?? [])
+    await handler({ reason: "quit" }, ctx);
+  assert.equal(created, 0);
+  for (const handler of handlers.get("session_start") ?? []) handler({}, ctx);
+  assert.equal(created, 1);
+  for (const handler of handlers.get("session_start") ?? []) handler({}, ctx);
+  assert.equal(created, 1);
+});
+
+test("after shutdown a late command does not create a second YouTube player", async () => {
+  let created = 0;
+  const { handlers, commands } = createExtensionRegistration(
+    undefined,
+    undefined,
+    () => {
+      created++;
+      return inertYoutube;
+    },
+  );
+  const { ctx, calls } = createContext("tui");
+  for (const handler of handlers.get("session_start") ?? []) handler({}, ctx);
+  for (const handler of handlers.get("session_shutdown") ?? [])
+    await handler({ reason: "quit" }, ctx);
+  assert.equal(created, 1);
+  const command = commands.find((entry) => entry.name === "nox-youtube")!;
+  await command.options.handler("pause", ctx);
+  assert.equal(created, 1, "no player was created after shutdown");
+  assert.equal(calls.at(-1)?.[0], "notify");
+  // A session that starts again (the same instance reused) gets a fresh player.
+  for (const handler of handlers.get("session_start") ?? []) handler({}, ctx);
+  assert.equal(created, 2);
 });
