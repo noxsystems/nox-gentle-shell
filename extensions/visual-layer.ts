@@ -9,11 +9,12 @@ import {
 import { createVisualController, type VisualController } from "./runtime.js";
 import { spotifyOverlayComponent } from "./spotify-ui.js";
 import { spotifyAuthDiagnostic } from "./spotify-auth.js";
+import { sharedYoutubeDir } from "./youtube-broker-protocol.js";
+import { createYoutubeForSession } from "./youtube-client.js";
 import {
-  createYoutubePlayer,
   detectWindowsMpv,
   youtubeOverlayComponent,
-  type YoutubePlayer,
+  type YoutubeControl,
 } from "./youtube-player.js";
 
 const YOUTUBE_USAGE =
@@ -22,26 +23,47 @@ const YOUTUBE_USAGE =
 export default function (
   pi: ExtensionAPI,
   injectedController?: VisualController,
-  injectedYoutube?: YoutubePlayer,
+  injectedYoutube?: YoutubeControl,
+  createYoutube?: () => YoutubeControl,
 ) {
   const controller = injectedController ?? createVisualController(pi.events);
   let repaintYoutube: (() => void) | undefined;
-  const youtube =
-    injectedYoutube ??
-    createYoutubePlayer({
-      windows: detectWindowsMpv(),
-      onChange: () => {
-        repaintYoutube?.();
-        controller.repaintYoutube();
-      },
-    });
-  controller.setYoutubeSource(() => youtube.snapshot);
+  const make =
+    createYoutube ??
+    (() =>
+      createYoutubeForSession({
+        shared: sharedYoutubeDir(),
+        windows: detectWindowsMpv(),
+        onChange: () => {
+          repaintYoutube?.();
+          controller.repaintYoutube();
+        },
+      }));
+  // Pi also runs this factory just to list extensions, so it must have no side effects: the
+  // player binds sockets and joins the shared broker, which only a started session may do.
+  let created = injectedYoutube;
+  // Once the session shut down, a late command or overlay must not bring a player back.
+  let closed = false;
+  const youtube = () => {
+    if (created) return created;
+    if (closed) throw new Error("YouTube player is closed");
+    return (created = make());
+  };
+  controller.setYoutubeSource(() => created?.snapshot);
 
-  pi.on("session_start", (_event, ctx) => controller.start(ctx));
-  pi.on("session_shutdown", (_event, ctx) => {
-    // mpv is a separate process; it must not outlive the session.
-    youtube.dispose();
+  pi.on("session_start", (_event, ctx) => {
+    closed = false;
+    youtube();
+    controller.start(ctx);
+  });
+  pi.on("session_shutdown", (event, ctx) => {
+    // mpv is a separate process. The shared player keeps it for the sessions that remain and
+    // stops it with the last one; the reason tells it whether a /reload may follow.
+    const closing = created?.dispose(event.reason);
+    if (!injectedYoutube) created = undefined;
+    closed = true;
     controller.cleanup(ctx);
+    return closing;
   });
 
   pi.on("message_start", (_event, ctx) => controller.refresh(ctx));
@@ -219,7 +241,7 @@ export default function (
         (tui, theme, _keys, done) => {
           repaintYoutube = () => tui.requestRender();
           return youtubeOverlayComponent(
-            youtube,
+            youtube(),
             theme,
             () => tui.requestRender(),
             done,
@@ -242,13 +264,13 @@ export default function (
       };
       try {
         if (command === "play" && rest.length === 1) {
-          await youtube.play(rest[0]!);
+          await youtube().play(rest[0]!);
           await openYoutube(ctx);
         } else if (command === "open") await openYoutube(ctx);
-        else if (command === "pause") await youtube.action("toggle");
-        else if (command === "next") await youtube.action("next");
-        else if (command === "prev") await youtube.action("previous");
-        else if (command === "stop") await youtube.stop();
+        else if (command === "pause") await youtube().action("toggle");
+        else if (command === "next") await youtube().action("next");
+        else if (command === "prev") await youtube().action("previous");
+        else if (command === "stop") await youtube().stop();
         else warn(YOUTUBE_USAGE);
       } catch (error) {
         warn(error instanceof Error ? error.message : String(error));
