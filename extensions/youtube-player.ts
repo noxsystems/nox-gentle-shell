@@ -33,9 +33,53 @@ export interface MpvProcess {
     callback: (code: number | null, signal?: NodeJS.Signals | null) => void,
   ): void;
 }
+/** One open JSON IPC connection to mpv; text is newline-delimited JSON. */
+export interface IpcConnection {
+  write(text: string): void;
+  onData(callback: (chunk: string) => void): void;
+  onClose(callback: () => void): void;
+  destroy(): void;
+}
+/** How the player reaches mpv's IPC server. */
+export interface MpvTransport {
+  /** The value passed to mpv's --input-ipc-server. */
+  address: string;
+  /** Resolves undefined while mpv is not listening yet. */
+  connect(): Promise<IpcConnection | undefined>;
+  /** Removes leftovers of a finished session, e.g. a stale socket file. */
+  cleanup(): void;
+}
+
+export function unixSocketTransport(socketPath: string): MpvTransport {
+  return {
+    address: socketPath,
+    connect: () =>
+      new Promise((resolve) => {
+        const socket = net.createConnection(socketPath);
+        socket.once("connect", () => {
+          socket.on("error", () => {});
+          resolve({
+            write: (text) => void socket.write(text),
+            onData: (callback) =>
+              void socket.on("data", (chunk) => callback(chunk.toString())),
+            onClose: (callback) => void socket.on("close", callback),
+            destroy: () => socket.destroy(),
+          });
+        });
+        socket.once("error", () => {
+          socket.destroy();
+          resolve(undefined);
+        });
+      }),
+    cleanup: () => rmSync(socketPath, { force: true }),
+  };
+}
+
 export interface YoutubePlayerOptions {
   launch?: (args: string[]) => MpvProcess;
   socketPath?: string;
+  /** Overrides the unix socket transport; socketPath is then ignored. */
+  transport?: MpvTransport;
   mpvPath?: string;
   ytdlPath?: string;
   /**
@@ -127,10 +171,13 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
     // Distribution builds of yt-dlp go stale fast; prefer Homebrew's when present.
     (existsSync(BREW_YT_DLP) ? BREW_YT_DLP : "yt-dlp");
   // A private 0700 directory keeps other local users from racing or reaching the IPC socket.
-  const privateDir = options.socketPath
-    ? undefined
-    : mkdtempSync(join(tmpdir(), "nox-youtube-"));
-  const socketPath = options.socketPath ?? join(privateDir!, "mpv.sock");
+  const privateDir =
+    options.transport || options.socketPath
+      ? undefined
+      : mkdtempSync(join(tmpdir(), "nox-youtube-"));
+  const transport =
+    options.transport ??
+    unixSocketTransport(options.socketPath ?? join(privateDir!, "mpv.sock"));
   const quitTimeout = options.quitTimeoutMs ?? 1_000;
   const launch = options.launch ?? spawnMpv(mpvPath);
   const cookies =
@@ -140,7 +187,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
 
   let snapshot: YoutubeSnapshot | undefined;
   let mpv: MpvProcess | undefined;
-  let socket: net.Socket | undefined;
+  let socket: IpcConnection | undefined;
   let generation = 0;
   let requestId = 0;
   let failures = 0;
@@ -166,7 +213,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
     failPending();
     mpv?.kill();
     mpv = undefined;
-    rmSync(socketPath, { force: true });
+    transport.cleanup();
   };
 
   const send = (command: unknown[]) =>
@@ -273,14 +320,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
   const connect = async (version: number) => {
     for (let attempt = 0; attempt < CONNECT_ATTEMPTS; attempt++) {
       if (version !== generation) return;
-      const connected = await new Promise<net.Socket | undefined>((resolve) => {
-        const candidate = net.createConnection(socketPath);
-        candidate.once("connect", () => resolve(candidate));
-        candidate.once("error", () => {
-          candidate.destroy();
-          resolve(undefined);
-        });
-      });
+      const connected = await transport.connect();
       if (connected) {
         if (version !== generation) {
           connected.destroy();
@@ -288,21 +328,20 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
         }
         socket = connected;
         let buffer = "";
-        connected.on("data", (chunk) => {
-          buffer += chunk.toString();
+        connected.onData((chunk) => {
+          buffer += chunk;
           let newline: number;
           while ((newline = buffer.indexOf("\n")) >= 0) {
             onMessage(buffer.slice(0, newline));
             buffer = buffer.slice(newline + 1);
           }
         });
-        connected.on("close", () => {
+        connected.onClose(() => {
           if (socket === connected) {
             socket = undefined;
             failPending();
           }
         });
-        connected.on("error", () => {});
         OBSERVED.forEach(
           (name, index) =>
             void send(["observe_property", index + 1, name]).catch(() => {}),
@@ -341,7 +380,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
       "--no-video",
       "--no-terminal",
       "--idle=no",
-      `--input-ipc-server=${socketPath}`,
+      `--input-ipc-server=${transport.address}`,
       `--script-opts=ytdl_hook-ytdl_path=${ytdlPath}`,
       // WSLg forwards audio over RDP to a 44.1 kHz s16 stereo sink that stutters with
       // mpv's defaults; matching its format and deepening both buffers keeps it smooth.
@@ -447,7 +486,7 @@ export function createYoutubePlayer(options: YoutubePlayerOptions = {}) {
       );
     },
     get socketPath() {
-      return socketPath;
+      return transport.address;
     },
     async stop() {
       // An unresponsive mpv must not keep stop() from killing it.

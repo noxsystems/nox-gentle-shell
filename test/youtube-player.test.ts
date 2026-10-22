@@ -727,3 +727,69 @@ test("killing mpv escalates to SIGKILL when SIGTERM is ignored", async (t) => {
   await until(() => exit !== undefined);
   assert.equal(exit, "SIGKILL");
 });
+
+test("a custom transport carries the whole IPC session without a unix socket", async (t) => {
+  const written: Array<{ command: unknown[]; request_id: number }> = [];
+  let receive: ((chunk: string) => void) | undefined;
+  let closed = 0;
+  let cleaned = 0;
+  let exit: ((code: number | null) => void) | undefined;
+  const launches: string[][] = [];
+  const player = createYoutubePlayer({
+    transport: {
+      address: "\\\\.\\pipe\\nox-test",
+      async connect() {
+        return {
+          write(text: string) {
+            for (const line of text.split("\n").filter(Boolean)) {
+              const message = JSON.parse(line);
+              written.push(message);
+              receive?.(
+                `${JSON.stringify({ request_id: message.request_id, error: "success" })}\n`,
+              );
+            }
+          },
+          onData(callback: (chunk: string) => void) {
+            receive = callback;
+          },
+          onClose() {},
+          destroy() {
+            closed++;
+          },
+        };
+      },
+      cleanup() {
+        cleaned++;
+      },
+    },
+    launch: (args) => {
+      launches.push(args);
+      return { kill() {}, onExit: (callback) => void (exit = callback) };
+    },
+    now: () => 1_000,
+  });
+  t.after(() => player.dispose());
+
+  await player.play("https://youtu.be/abc");
+  assert.ok(launches[0]!.includes("--input-ipc-server=\\\\.\\pipe\\nox-test"));
+  assert.equal(player.socketPath, "\\\\.\\pipe\\nox-test");
+  await until(() => written.length >= 6);
+  assert.deepEqual(
+    written.slice(0, 6).map((message) => message.command[2]),
+    ["media-title", "pause", "time-pos", "duration", "playlist-pos", "playlist-count"],
+  );
+
+  receive!(
+    `${JSON.stringify({ event: "property-change", name: "media-title", data: "Song" })}\n`,
+  );
+  assert.equal(player.snapshot?.title, "Song");
+  await player.action("toggle");
+  assert.deepEqual(written.at(-1)!.command, ["cycle", "pause"]);
+
+  await player.stop();
+  assert.deepEqual(written.at(-1)!.command, ["quit"]);
+  assert.ok(closed >= 1);
+  assert.ok(cleaned >= 1);
+  assert.equal(player.running, false);
+  assert.equal(exit !== undefined, true);
+});
